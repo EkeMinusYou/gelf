@@ -1,0 +1,5 @@
+brews:
+  - repository:
+      owner: EkeMinusYou # Homebrew Taps 用のリポジトリのオーナー名
+      name: homebrew-gelf # Homebrew Taps 用のリポジトリ名
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"

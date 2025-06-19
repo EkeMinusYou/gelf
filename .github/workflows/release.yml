@@ -1,0 +1,38 @@
+name: release
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "*"
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+permissions:
+  contents: write
+  packages: write
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git fetch --force --tags
+      - name: Generate github token
+        id: generate_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app_id: ${{ vars.RELEASER_APP_ID }}
+          private_key: ${{ secrets.RELEASER_PRIVATE_KEY }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ">=1.23.2"
+          cache: true
+          cache-dependency-path: go.sum
+      - run: go mod download
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_TOKEN: ${{ steps.generate_token.outputs.token }}
