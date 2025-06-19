@@ -1,0 +1,6 @@
+version: 2
+homebrew_casks:
+  - repository:
+      owner: EkeMinusYou
+      name: homebrew-gelf
+      token: "{{ .Env.APP_TOKEN }}"
