@@ -16,6 +16,7 @@ type Config struct {
 	ReviewLanguage string
 	CommitModel    string
 	ReviewModel    string
+	Color          string
 }
 
 type FileConfig struct {
@@ -28,6 +29,7 @@ type FileConfig struct {
 		Pro   string `yaml:"pro"`
 	} `yaml:"model"`
 	Language string `yaml:"language"`
+	Color    string `yaml:"color"`
 	Commit   struct {
 		Model    string `yaml:"model"`
 		Language string `yaml:"language"`
@@ -102,6 +104,12 @@ func Load() (*Config, error) {
 		reviewLanguage = defaultLanguage
 	}
 
+	// Color settings
+	color := fileConfig.Color
+	if color == "" {
+		color = "always" // default to always
+	}
+
 	// Resolve actual model names
 	var actualFlashModel, actualProModel string
 	if commitModel == "flash" {
@@ -131,6 +139,7 @@ func Load() (*Config, error) {
 		ReviewLanguage: reviewLanguage,
 		CommitModel:    commitModel,
 		ReviewModel:    reviewModel,
+		Color:          color,
 	}, nil
 }
 
@@ -177,4 +186,15 @@ func loadFromFile() (*FileConfig, error) {
 	}
 
 	return nil, os.ErrNotExist
+}
+
+func (c *Config) UseColor() bool {
+	switch c.Color {
+	case "never":
+		return false
+	case "always":
+		return true
+	default:
+		return true
+	}
 }

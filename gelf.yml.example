@@ -21,6 +21,10 @@ model:
 # Examples: english, japanese, spanish, french, german, chinese, korean
 language: "english"
 
+# Color output settings (default: auto)
+# Options: auto, always, never
+color: "auto"
+
 # Commit-specific settings
 commit:
   # Model to use for commit messages: "flash", "pro", or custom model name (default: flash)

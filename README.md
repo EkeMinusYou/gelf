@@ -74,6 +74,8 @@ commit:
 review:
   model: "pro"       # optional, default: pro
   language: "english"  # optional, inherits from global language
+
+color: "always"  # optional, default: always
 ```
 
 #### Environment Variables (Alternative)
@@ -372,6 +374,8 @@ review:
 doc:
   model: string          # Model for documentation: "flash", "pro", or custom (default: pro)
   language: string       # Language for documentation generation (inherits from global if not set)
+
+color: string            # Color output setting: "always" or "never" (default: always)
 ```
 
 ### Environment Variables

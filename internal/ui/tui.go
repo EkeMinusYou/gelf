@@ -9,7 +9,6 @@ import (
 	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/doc"
 	"github.com/EkeMinusYou/gelf/internal/git"
-
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -332,7 +331,27 @@ var (
 	deletedStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("1")) // レッド
 
+	codeBlockStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("235")). // Dark gray background
+			Padding(1).
+			Margin(0, 2)
 )
+
+func DisableColor() {
+	// No color styles
+	titleStyle = lipgloss.NewStyle().Bold(true)
+	messageStyle = lipgloss.NewStyle().Bold(true).Italic(true)
+	promptStyle = lipgloss.NewStyle().Bold(true)
+	successStyle = lipgloss.NewStyle().Bold(true)
+	errorStyle = lipgloss.NewStyle().Bold(true)
+	loadingStyle = lipgloss.NewStyle().Bold(true)
+	editPromptStyle = lipgloss.NewStyle().Bold(true)
+	diffStyle = lipgloss.NewStyle()
+	fileStyle = lipgloss.NewStyle().Bold(true)
+	addedStyle = lipgloss.NewStyle()
+	deletedStyle = lipgloss.NewStyle()
+	codeBlockStyle = lipgloss.NewStyle().Padding(1).Margin(0, 2)
+}
 
 func NewReviewTUI(aiClient *ai.VertexAIClient, diff string, noStyle bool, reviewLanguage string) *reviewModel {
 	s := spinner.New()
@@ -980,12 +999,6 @@ func (m *reviewModel) printCodeContext(diff string, targetLine int) {
 
 	if len(contextLines) > 0 {
 		fmt.Printf("  %s\n", diffStyle.Render("📋 Code context:"))
-
-		// Add code block styling
-		codeBlockStyle := lipgloss.NewStyle().
-			Background(lipgloss.Color("235")). // Dark gray background
-			Padding(1).
-			Margin(0, 2)
 
 		codeContent := strings.Join(contextLines, "\n")
 		fmt.Println(codeBlockStyle.Render(codeContent))

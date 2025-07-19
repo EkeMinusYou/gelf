@@ -8,7 +8,6 @@ import (
 	"github.com/EkeMinusYou/gelf/internal/config"
 	"github.com/EkeMinusYou/gelf/internal/git"
 	"github.com/EkeMinusYou/gelf/internal/ui"
-
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 )
@@ -44,6 +43,11 @@ func runReview(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+
+	// Create warning style based on color settings
+	if !cfg.UseColor() {
+		reviewWarningStyle = lipgloss.NewStyle() // No color
 	}
 
 	if reviewModel != "" {
@@ -86,6 +90,9 @@ func runReview(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create AI client: %w", err)
 	}
 
+	if !cfg.UseColor() {
+		ui.DisableColor()
+	}
 	// Use TUI for loading and display experience
 	reviewTUI := ui.NewReviewTUI(aiClient, diff, noStyle, cfg.ReviewLanguage)
 	_, err = reviewTUI.Run()

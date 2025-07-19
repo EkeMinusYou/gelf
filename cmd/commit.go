@@ -9,7 +9,6 @@ import (
 	"github.com/EkeMinusYou/gelf/internal/config"
 	"github.com/EkeMinusYou/gelf/internal/git"
 	"github.com/EkeMinusYou/gelf/internal/ui"
-
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 )
@@ -45,6 +44,10 @@ func runCommit(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+
+	if !cfg.UseColor() {
+		warningStyle = lipgloss.NewStyle() // No color
 	}
 
 	if model != "" {
@@ -112,6 +115,9 @@ func runCommit(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	if !cfg.UseColor() {
+		ui.DisableColor()
+	}
 	tui := ui.NewTUI(aiClient, diff, cfg.CommitLanguage)
 	if err := tui.Run(); err != nil {
 		return fmt.Errorf("TUI error: %w", err)
