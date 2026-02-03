@@ -10,6 +10,7 @@ import (
 	"github.com/EkeMinusYou/gelf/internal/config"
 	"github.com/EkeMinusYou/gelf/internal/git"
 	"github.com/EkeMinusYou/gelf/internal/github"
+	"github.com/charmbracelet/glamour"
 	"github.com/spf13/cobra"
 )
 
@@ -143,7 +144,14 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Base: %s\nHead: %s\n\n", baseBranch, headBranch)
 		fmt.Fprintf(cmd.OutOrStdout(), "Title:\n%s\n\n", prContent.Title)
-		fmt.Fprintf(cmd.OutOrStdout(), "Body:\n%s\n", prContent.Body)
+		fmt.Fprintf(cmd.OutOrStdout(), "Body (rendered):\n")
+		rendered, err := renderMarkdown(prContent.Body)
+		if err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Failed to render markdown: %v\n", err)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", prContent.Body)
+			return nil
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\n", rendered)
 		return nil
 	}
 
@@ -161,4 +169,16 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func renderMarkdown(markdown string) (string, error) {
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(0),
+	)
+	if err != nil {
+		return "", err
+	}
+
+	return renderer.Render(markdown)
 }
