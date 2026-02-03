@@ -41,6 +41,14 @@ review:
   # Language for code reviews (optional, inherits from global language if not set)
   language: "english"
 
+# PR-specific settings
+pr:
+  # Model to use for pull requests: "flash", "pro", or custom model name (default: pro)
+  model: "pro"
+
+  # Language for pull request titles and descriptions (optional, inherits from global language if not set)
+  language: "english"
+
 # Configuration priority (highest to lowest):
 # 1. Environment variables (VERTEXAI_PROJECT, VERTEXAI_LOCATION)
 # 2. This configuration file

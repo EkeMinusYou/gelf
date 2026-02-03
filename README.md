@@ -6,6 +6,7 @@ gelf is a Go-based CLI tool that automatically generates Git commit messages and
 
 - 🤖 **AI-Powered**: Intelligent commit message generation using Vertex AI (Gemini)
 - 🔍 **Code Review**: AI-powered code review with streaming real-time feedback
+- 📝 **PR Creation**: Generate pull request titles and descriptions with AI
 - 🎨 **Clean TUI**: Simple and intuitive user interface built with Bubble Tea  
 - ⚡ **Fast Processing**: Real-time progress indicators and streaming responses
 - 🛡️ **Safe Operations**: Only operates on staged changes for secure workflow
@@ -72,6 +73,10 @@ commit:
   language: "english"  # optional, inherits from global language
 
 review:
+  model: "pro"       # optional, default: pro
+  language: "english"  # optional, inherits from global language
+
+pr:
   model: "pro"       # optional, default: pro
   language: "english"  # optional, inherits from global language
 
@@ -146,6 +151,20 @@ The review feature provides:
    - Performance and maintainability suggestions
    - No interactive prompts - displays results directly
 
+### Pull Request Creation
+
+Generate pull requests with AI-generated titles and descriptions based on committed changes:
+
+```bash
+gelf pr create
+```
+
+Options:
+- `--draft` to create a draft PR
+- `--dry-run` to print the generated title/body without creating a PR
+- `--model` to override the model for PR generation
+- `--language` to set the output language
+
 ### Documentation Generation
 
 Generate AI-powered documentation for your codebase:
@@ -219,6 +238,18 @@ gelf review --no-style
 # Generate code review in a specific language
 gelf review --language japanese
 
+# Create a pull request with AI-generated title/body
+gelf pr create
+
+# Create a draft pull request
+gelf pr create --draft
+
+# Preview generated PR title/body without creating a PR
+gelf pr create --dry-run
+
+# Use specific model and language for PR generation
+gelf pr create --model gemini-2.0-flash-exp --language japanese
+
 # Generate documentation
 gelf doc --src . --dst README.md --template readme
 
@@ -255,6 +286,7 @@ While gelf can work with any language supported by Gemini models, common example
 # Set language for specific commands
 gelf commit --language japanese
 gelf review --language spanish
+gelf pr create --language french
 gelf doc --src . --dst README.md --template readme --language french
 
 # Use different languages for different operations
@@ -273,6 +305,9 @@ commit:
 review:
   language: "english"   # Language for code reviews
 
+pr:
+  language: "english"   # Language for pull request titles and descriptions
+
 doc:
   language: "english"   # Language for documentation generation
 ```
@@ -282,7 +317,7 @@ If no language is specified, commit, review, and documentation generation will u
 
 ### Priority Order
 1. Command-line `--language` flag (highest priority)
-2. Configuration file command-specific settings (`commit.language`/`review.language`/`doc.language`)
+2. Configuration file command-specific settings (`commit.language`/`review.language`/`pr.language`/`doc.language`)
 3. Configuration file global setting (`language`)
 4. Default value (`english`)
 
@@ -308,10 +343,14 @@ cmd/
 ├── root.go          # Root command definition
 ├── commit.go        # Commit command implementation
 ├── review.go        # Review command implementation
+├── pr.go            # Pull request command implementation
 └── doc.go           # Documentation generation command implementation
 internal/
 ├── git/
-│   └── diff.go      # Git operations (staged and unstaged diffs)
+│   ├── diff.go      # Git operations (staged and unstaged diffs)
+│   └── branch.go    # Branch and commit range helpers
+├── github/
+│   └── template.go  # GitHub PR template resolution
 ├── ai/
 │   └── vertex.go    # Vertex AI integration (commit messages, code review, and documentation)
 ├── ui/
@@ -373,6 +412,10 @@ commit:
 review:
   model: string          # Model for reviews: "flash", "pro", or custom (default: pro)
   language: string       # Language for code reviews (inherits from global if not set)
+
+pr:
+  model: string          # Model for pull requests: "flash", "pro", or custom (default: pro)
+  language: string       # Language for pull request titles and descriptions (inherits from global if not set)
 
 doc:
   model: string          # Model for documentation: "flash", "pro", or custom (default: pro)

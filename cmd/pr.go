@@ -1,0 +1,164 @@
+package cmd
+
+import (
+	"context"
+	"fmt"
+	"os/exec"
+	"strings"
+
+	"github.com/EkeMinusYou/gelf/internal/ai"
+	"github.com/EkeMinusYou/gelf/internal/config"
+	"github.com/EkeMinusYou/gelf/internal/git"
+	"github.com/EkeMinusYou/gelf/internal/github"
+	"github.com/spf13/cobra"
+)
+
+var prCmd = &cobra.Command{
+	Use:   "pr",
+	Short: "Manage pull requests",
+}
+
+var prCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Create a pull request with AI-generated title and description",
+	RunE:  runPRCreate,
+}
+
+var (
+	prDraft    bool
+	prDryRun   bool
+	prModel    string
+	prLanguage string
+)
+
+func init() {
+	prCreateCmd.Flags().BoolVar(&prDraft, "draft", false, "Create the pull request as a draft")
+	prCreateCmd.Flags().BoolVar(&prDryRun, "dry-run", false, "Print the generated title and body without creating a pull request")
+	prCreateCmd.Flags().StringVar(&prModel, "model", "", "Override default model for PR generation")
+	prCreateCmd.Flags().StringVar(&prLanguage, "language", "", "Language for PR generation (e.g., english, japanese)")
+
+	prCmd.AddCommand(prCreateCmd)
+}
+
+func runPRCreate(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+
+	if prLanguage != "" {
+		cfg.PRLanguage = prLanguage
+	}
+
+	modelToUse := cfg.PRModel
+	if prModel != "" {
+		modelToUse = prModel
+	}
+	cfg.FlashModel = cfg.ResolveModel(modelToUse)
+
+	token, err := github.AuthToken(ctx)
+	if err != nil {
+		return err
+	}
+
+	repoInfo, err := github.RepoInfoFromGH(ctx)
+	if err != nil {
+		return err
+	}
+
+	repoRoot, err := git.GetRepoRoot()
+	if err != nil {
+		return err
+	}
+
+	template, err := github.FindPullRequestTemplate(ctx, repoRoot, token, repoInfo.Owner)
+	if err != nil {
+		return fmt.Errorf("failed to resolve pull request template: %w", err)
+	}
+
+	baseBranch, err := git.GetDefaultBaseBranch()
+	if err != nil {
+		return fmt.Errorf("failed to determine base branch: %w", err)
+	}
+
+	headBranch, err := git.GetCurrentBranch()
+	if err != nil {
+		return fmt.Errorf("failed to determine current branch: %w", err)
+	}
+
+	baseRef := "origin/" + baseBranch
+	commitLog, err := git.GetCommitLog(baseRef, "HEAD")
+	if err != nil {
+		return fmt.Errorf("failed to get commit log: %w", err)
+	}
+	if commitLog == "" {
+		return fmt.Errorf("no commits found between %s and %s", baseRef, headBranch)
+	}
+
+	diffStat, err := git.GetCommittedDiffStat(baseRef, "HEAD")
+	if err != nil {
+		return fmt.Errorf("failed to get diff stat: %w", err)
+	}
+
+	diff, err := git.GetCommittedDiff(baseRef, "HEAD")
+	if err != nil {
+		return fmt.Errorf("failed to get diff: %w", err)
+	}
+	if diff == "" {
+		return fmt.Errorf("no committed changes found between %s and %s", baseRef, headBranch)
+	}
+
+	aiClient, err := ai.NewVertexAIClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create AI client: %w", err)
+	}
+
+	templateContent := ""
+	templatePath := ""
+	templateSource := ""
+	if template != nil {
+		templateContent = template.Content
+		templatePath = template.Path
+		templateSource = template.Source
+	}
+
+	prContent, err := aiClient.GeneratePullRequestContent(ctx, ai.PullRequestInput{
+		BaseBranch: baseBranch,
+		HeadBranch: headBranch,
+		CommitLog:  commitLog,
+		DiffStat:   diffStat,
+		Diff:       diff,
+		Template:   templateContent,
+		Language:   cfg.PRLanguage,
+	})
+	if err != nil {
+		return err
+	}
+
+	if prDryRun {
+		if templateContent != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Using %s template: %s\n", templateSource, templatePath)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Base: %s\nHead: %s\n\n", baseBranch, headBranch)
+		fmt.Fprintf(cmd.OutOrStdout(), "Title:\n%s\n\n", prContent.Title)
+		fmt.Fprintf(cmd.OutOrStdout(), "Body:\n%s\n", prContent.Body)
+		return nil
+	}
+
+	ghArgs := []string{"pr", "create", "--title", prContent.Title, "--body-file", "-", "--base", baseBranch}
+	if prDraft {
+		ghArgs = append(ghArgs, "--draft")
+	}
+
+	ghCmd := exec.Command("gh", ghArgs...)
+	ghCmd.Stdin = strings.NewReader(prContent.Body)
+	ghCmd.Stdout = cmd.OutOrStdout()
+	ghCmd.Stderr = cmd.ErrOrStderr()
+	if err := ghCmd.Run(); err != nil {
+		return fmt.Errorf("failed to create pull request: %w", err)
+	}
+
+	return nil
+}
