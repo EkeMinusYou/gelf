@@ -150,10 +150,9 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		if templateContent != "" {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Using %s template: %s\n", templateSource, templatePath)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Base: %s\nHead: %s\n\n", baseBranch, headBranch)
 		fmt.Fprintf(cmd.OutOrStdout(), "Title:\n%s\n\n", prContent.Title)
 		if prRender {
-			fmt.Fprintf(cmd.OutOrStdout(), "Body (rendered):\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "Body:\n")
 			rendered, err := renderMarkdown(prContent.Body)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Failed to render markdown: %v\n", err)
