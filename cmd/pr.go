@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 
@@ -32,6 +34,7 @@ var (
 	prLanguage string
 	prRender   bool
 	prNoRender bool
+	prYes      bool
 )
 
 func init() {
@@ -41,6 +44,7 @@ func init() {
 	prCreateCmd.Flags().StringVar(&prLanguage, "language", "", "Language for PR generation (e.g., english, japanese)")
 	prCreateCmd.Flags().BoolVar(&prRender, "render", true, "Render markdown body in dry-run output")
 	prCreateCmd.Flags().BoolVar(&prNoRender, "no-render", false, "Disable markdown rendering in dry-run output")
+	prCreateCmd.Flags().BoolVar(&prYes, "yes", false, "Automatically approve PR creation without confirmation")
 
 	prCmd.AddCommand(prCreateCmd)
 }
@@ -166,6 +170,31 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	if !prYes {
+		fmt.Fprintf(cmd.OutOrStdout(), "Title:\n%s\n\n", prContent.Title)
+		if prRender {
+			fmt.Fprintf(cmd.OutOrStdout(), "Body:\n")
+			rendered, err := renderMarkdown(prContent.Body)
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Failed to render markdown: %v\n", err)
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\n", prContent.Body)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\n", rendered)
+			}
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "Body:\n%s\n", prContent.Body)
+		}
+
+		ok, err := confirmPRCreate(cmd)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			fmt.Fprintln(cmd.OutOrStdout(), "Cancelled.")
+			return nil
+		}
+	}
+
 	ghArgs := []string{"pr", "create", "--title", prContent.Title, "--body-file", "-", "--base", baseBranch}
 	if prDraft {
 		ghArgs = append(ghArgs, "--draft")
@@ -192,4 +221,29 @@ func renderMarkdown(markdown string) (string, error) {
 	}
 
 	return renderer.Render(markdown)
+}
+
+func confirmPRCreate(cmd *cobra.Command) (bool, error) {
+	reader := bufio.NewReader(cmd.InOrStdin())
+	for {
+		fmt.Fprint(cmd.OutOrStdout(), "Create this pull request? (y)es / (n)o: ")
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return false, err
+		}
+
+		text := strings.TrimSpace(line)
+		if text == "" && err == io.EOF {
+			return false, fmt.Errorf("confirmation required; use --yes to skip")
+		}
+
+		switch strings.ToLower(text) {
+		case "y", "yes":
+			return true, nil
+		case "n", "no":
+			return false, nil
+		default:
+			fmt.Fprintln(cmd.OutOrStdout(), "Please answer yes or no.")
+		}
+	}
 }

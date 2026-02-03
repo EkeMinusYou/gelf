@@ -166,6 +166,7 @@ Options:
 - `--no-render` to disable markdown rendering in dry-run output
 - `--model` to override the model for PR generation
 - `--language` to set the output language
+- `--yes` to skip confirmation prompt
 
 ### Documentation Generation
 
@@ -254,6 +255,9 @@ gelf pr create --dry-run --no-render
 
 # Use specific model and language for PR generation
 gelf pr create --model gemini-2.0-flash-exp --language japanese
+
+# Skip confirmation prompt
+gelf pr create --yes
 
 # Generate documentation
 gelf doc --src . --dst README.md --template readme
