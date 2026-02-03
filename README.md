@@ -162,6 +162,8 @@ gelf pr create
 Options:
 - `--draft` to create a draft PR
 - `--dry-run` to print the generated title/body without creating a PR
+- `--render` to render markdown in dry-run output (default: true)
+- `--no-render` to disable markdown rendering in dry-run output
 - `--model` to override the model for PR generation
 - `--language` to set the output language
 
@@ -246,6 +248,9 @@ gelf pr create --draft
 
 # Preview generated PR title/body without creating a PR
 gelf pr create --dry-run
+
+# Preview without markdown rendering
+gelf pr create --dry-run --no-render
 
 # Use specific model and language for PR generation
 gelf pr create --model gemini-2.0-flash-exp --language japanese

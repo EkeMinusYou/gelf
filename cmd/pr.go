@@ -30,6 +30,8 @@ var (
 	prDryRun   bool
 	prModel    string
 	prLanguage string
+	prRender   bool
+	prNoRender bool
 )
 
 func init() {
@@ -37,6 +39,8 @@ func init() {
 	prCreateCmd.Flags().BoolVar(&prDryRun, "dry-run", false, "Print the generated title and body without creating a pull request")
 	prCreateCmd.Flags().StringVar(&prModel, "model", "", "Override default model for PR generation")
 	prCreateCmd.Flags().StringVar(&prLanguage, "language", "", "Language for PR generation (e.g., english, japanese)")
+	prCreateCmd.Flags().BoolVar(&prRender, "render", true, "Render markdown body in dry-run output")
+	prCreateCmd.Flags().BoolVar(&prNoRender, "no-render", false, "Disable markdown rendering in dry-run output")
 
 	prCmd.AddCommand(prCreateCmd)
 }
@@ -51,6 +55,10 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 
 	if prLanguage != "" {
 		cfg.PRLanguage = prLanguage
+	}
+
+	if prNoRender {
+		prRender = false
 	}
 
 	modelToUse := cfg.PRModel
@@ -144,14 +152,18 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Base: %s\nHead: %s\n\n", baseBranch, headBranch)
 		fmt.Fprintf(cmd.OutOrStdout(), "Title:\n%s\n\n", prContent.Title)
-		fmt.Fprintf(cmd.OutOrStdout(), "Body (rendered):\n")
-		rendered, err := renderMarkdown(prContent.Body)
-		if err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Failed to render markdown: %v\n", err)
-			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", prContent.Body)
-			return nil
+		if prRender {
+			fmt.Fprintf(cmd.OutOrStdout(), "Body (rendered):\n")
+			rendered, err := renderMarkdown(prContent.Body)
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Failed to render markdown: %v\n", err)
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\n", prContent.Body)
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", rendered)
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "Body:\n%s\n", prContent.Body)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s\n", rendered)
 		return nil
 	}
 
