@@ -8,7 +8,9 @@ import (
 	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/git"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type prState int
@@ -33,6 +35,10 @@ type prModel struct {
 	err          error
 	state        prState
 	spinner      spinner.Model
+	viewport     viewport.Model
+	viewWidth    int
+	viewHeight   int
+	viewReady    bool
 }
 
 type msgPRGenerated struct {
@@ -69,6 +75,12 @@ func (m *prModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.viewWidth = msg.Width
+		m.viewHeight = msg.Height
+		m.updateViewportSize()
+		return m, nil
+
 	case tea.KeyMsg:
 		switch m.state {
 		case prStateLoading:
@@ -87,9 +99,20 @@ func (m *prModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmed = false
 				m.state = prStateDone
 				return m, tea.Quit
+			default:
+				if m.viewReady {
+					m.viewport, cmd = m.viewport.Update(msg)
+					return m, cmd
+				}
 			}
 		case prStateDone, prStateError:
 			return m, tea.Quit
+		}
+
+	case tea.MouseMsg:
+		if m.state == prStateConfirm && m.viewReady {
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
 		}
 
 	case msgPRGenerated:
@@ -100,6 +123,7 @@ func (m *prModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.content = msg.content
 			m.renderedBody = msg.renderedBody
 			m.state = prStateConfirm
+			m.refreshViewportContent(true)
 		}
 		return m, nil
 	}
@@ -122,19 +146,11 @@ func (m *prModel) View() string {
 		return fmt.Sprintf("%s\n\n%s", formatPRContext(m.diffSummary, m.commitLines), loadingText)
 
 	case prStateConfirm:
-		header := titleStyle.Render("📝 Generated Pull Request:")
-		title := messageStyle.Render(m.content.Title)
-		body := m.content.Body
-		if m.render && m.renderedBody != "" {
-			body = m.renderedBody
-		}
-
 		prompt := promptStyle.Render("Create this pull request? (y)es / (n)o")
-		context := formatPRContext(m.diffSummary, m.commitLines)
-		if context != "" {
-			return fmt.Sprintf("%s\n\n%s\n\n%s\n\n%s\n\n%s", context, header, title, body, prompt)
+		if m.viewReady {
+			return fmt.Sprintf("%s\n\n%s", m.viewport.View(), prompt)
 		}
-		return fmt.Sprintf("%s\n\n%s\n\n%s\n\n%s", header, title, body, prompt)
+		return fmt.Sprintf("%s\n\n%s", m.buildPRContent(), prompt)
 
 	case prStateError:
 		return errorStyle.Render(fmt.Sprintf("✗ Error: %v", m.err))
@@ -147,7 +163,7 @@ func (m *prModel) View() string {
 }
 
 func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(m, tea.WithMouseCellMotion())
 	_, err := p.Run()
 	if err != nil {
 		return nil, false, err
@@ -181,6 +197,66 @@ func (m *prModel) generatePRContent() tea.Cmd {
 			renderedBody: strings.TrimRight(rendered, "\n"),
 		}
 	})
+}
+
+func (m *prModel) buildPRContent() string {
+	header := titleStyle.Render("📝 Generated Pull Request:")
+	title := messageStyle.Render(m.content.Title)
+	body := m.content.Body
+	if m.render && m.renderedBody != "" {
+		body = m.renderedBody
+	}
+
+	sections := []string{}
+	context := formatPRContext(m.diffSummary, m.commitLines)
+	if context != "" {
+		sections = append(sections, context)
+	}
+	sections = append(sections, header, title, body)
+
+	return strings.Join(sections, "\n\n")
+}
+
+func (m *prModel) updateViewportSize() {
+	if m.viewWidth <= 0 || m.viewHeight <= 0 {
+		return
+	}
+
+	if !m.viewReady {
+		m.viewport = viewport.New(m.viewWidth, m.viewportHeight())
+		m.viewReady = true
+	} else {
+		m.viewport.Width = m.viewWidth
+		m.viewport.Height = m.viewportHeight()
+	}
+
+	m.refreshViewportContent(false)
+}
+
+func (m *prModel) refreshViewportContent(reset bool) {
+	if !m.viewReady || m.state != prStateConfirm || m.content == nil {
+		return
+	}
+
+	content := m.buildPRContent()
+	if m.viewWidth > 0 {
+		content = ansi.Wrap(content, m.viewWidth, "")
+	}
+	content = strings.TrimRight(content, "\n")
+
+	m.viewport.SetContent(content)
+	if reset {
+		m.viewport.GotoTop()
+	}
+}
+
+func (m *prModel) viewportHeight() int {
+	reserved := 2
+	height := m.viewHeight - reserved
+	if height < 1 {
+		return 1
+	}
+	return height
 }
 
 func formatPRDiffSummary(summary git.DiffSummary) string {
