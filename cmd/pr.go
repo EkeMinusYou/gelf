@@ -63,6 +63,10 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		prRender = false
 	}
 
+	if !cfg.UseColor() {
+		ui.DisableColor()
+	}
+
 	modelToUse := cfg.PRModel
 	if prModel != "" {
 		modelToUse = prModel
@@ -119,6 +123,17 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	}
 	if diff == "" {
 		return fmt.Errorf("no committed changes found between %s and %s", baseRef, headBranch)
+	}
+
+	if !prDryRun {
+		prContext := ui.FormatPRContext(diff, commitLog)
+		shouldContinue, err := ensureBranchPushed(cmd, headBranch, prContext)
+		if err != nil {
+			return err
+		}
+		if !shouldContinue {
+			return nil
+		}
 	}
 
 	aiClient, err := ai.NewVertexAIClient(ctx, cfg)
@@ -183,9 +198,6 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	} else {
-		if !cfg.UseColor() {
-			ui.DisableColor()
-		}
 		prTUI := ui.NewPRTUI(aiClient, ai.PullRequestInput{
 			BaseBranch: baseBranch,
 			HeadBranch: headBranch,
@@ -220,4 +232,47 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func ensureBranchPushed(cmd *cobra.Command, branch string, prContext string) (bool, error) {
+	status, err := git.GetPushStatus(branch)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if branch is pushed: %w", err)
+	}
+	if status.HeadPushed {
+		return true, nil
+	}
+
+	remoteName := status.RemoteName
+	if remoteName == "" {
+		remoteName = "origin"
+	}
+
+	if strings.TrimSpace(prContext) != "" {
+		fmt.Fprintln(cmd.ErrOrStderr(), prContext)
+		fmt.Fprintln(cmd.ErrOrStderr())
+	}
+
+	prompt := fmt.Sprintf("Current branch is not pushed to %s. Push now? (y)es / (n)o", remoteName)
+	confirmed, err := ui.PromptYesNoStyled(prompt)
+	if err != nil {
+		return false, err
+	}
+	if !confirmed {
+		return false, nil
+	}
+
+	args := []string{"push"}
+	if !status.HasUpstream {
+		args = []string{"push", "-u", remoteName, branch}
+	}
+
+	pushCmd := exec.Command("git", args...)
+	pushCmd.Stdout = cmd.OutOrStdout()
+	pushCmd.Stderr = cmd.ErrOrStderr()
+	if err := pushCmd.Run(); err != nil {
+		return false, fmt.Errorf("failed to push branch: %w", err)
+	}
+
+	return true, nil
 }

@@ -1,10 +1,8 @@
 package ui
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"sync"
@@ -63,7 +61,7 @@ func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
 
 	fmt.Printf("%s\n\n", m.buildPRContent())
 
-	confirmed, err := promptYesNo(promptStyle.Render("Create this pull request? (y)es / (n)o"))
+	confirmed, err := PromptYesNoStyled("Create this pull request? (y)es / (n)o")
 	return content, confirmed, err
 }
 
@@ -108,54 +106,6 @@ func (m *prModel) startLoadingIndicator(context string) func() {
 		wg.Wait()
 		fmt.Fprint(os.Stderr, "\r\033[2K\n")
 	}
-}
-
-func promptYesNo(prompt string) (bool, error) {
-	fmt.Printf("%s ", prompt)
-
-	if term.IsTerminal(int(os.Stdin.Fd())) {
-		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-		if err == nil {
-			defer func() {
-				_ = term.Restore(int(os.Stdin.Fd()), oldState)
-			}()
-
-			reader := bufio.NewReader(os.Stdin)
-			for {
-				b, err := reader.ReadByte()
-				if err != nil {
-					return false, err
-				}
-
-				switch b {
-				case '\r', '\n':
-					continue
-				}
-
-				ch := strings.ToLower(string(b))
-				if ch == "y" {
-					fmt.Println()
-					return true, nil
-				}
-				if ch == "n" {
-					fmt.Println()
-					return false, nil
-				}
-			}
-		}
-	}
-
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
-	if err != nil && err != io.EOF {
-		return false, err
-	}
-
-	line = strings.TrimSpace(line)
-	if strings.HasPrefix(strings.ToLower(line), "y") {
-		return true, nil
-	}
-	return false, nil
 }
 
 func (m *prModel) buildPRContent() string {
@@ -240,4 +190,10 @@ func parseCommitLines(log string) []string {
 		lines = append(lines, line)
 	}
 	return lines
+}
+
+func FormatPRContext(diff string, commitLog string) string {
+	diffSummary := git.ParseDiffSummary(diff)
+	commitLines := parseCommitLines(commitLog)
+	return formatPRContext(diffSummary, commitLines)
 }
