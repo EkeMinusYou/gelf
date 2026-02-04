@@ -144,7 +144,7 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	if !prDryRun {
 		prContext := ui.FormatPRContext(diff, commitLog)
 		var shouldContinue bool
-		shouldContinue, contextPrinted, err = ensureBranchPushed(cmd, headBranch, prContext)
+		shouldContinue, err = ensureBranchPushed(cmd, headBranch, prContext)
 		if err != nil {
 			return err
 		}
