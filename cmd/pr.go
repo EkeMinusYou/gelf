@@ -74,12 +74,32 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	}
 	cfg.FlashModel = cfg.ResolveModel(modelToUse)
 
-	token, err := github.AuthToken(ctx)
+	repoInfo, err := github.RepoInfoFromGH(ctx)
 	if err != nil {
 		return err
 	}
 
-	repoInfo, err := github.RepoInfoFromGH(ctx)
+	headBranch, err := git.GetCurrentBranch()
+	if err != nil {
+		return fmt.Errorf("failed to determine current branch: %w", err)
+	}
+
+	headRef := fmt.Sprintf("%s:%s", repoInfo.Owner, headBranch)
+	repoFullName := fmt.Sprintf("%s/%s", repoInfo.Owner, repoInfo.Name)
+	existingPR, err := github.FindOpenPullRequest(ctx, repoFullName, headRef)
+	if err != nil {
+		return err
+	}
+	if existingPR != nil {
+		stateLabel := existingPR.State
+		if existingPR.IsDraft {
+			stateLabel = "DRAFT"
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "Pull request already exists for branch %s (%s): #%d %s (%s)\n", headBranch, stateLabel, existingPR.Number, existingPR.Title, existingPR.URL)
+		return nil
+	}
+
+	token, err := github.AuthToken(ctx)
 	if err != nil {
 		return err
 	}
@@ -97,11 +117,6 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	baseBranch, err := git.GetDefaultBaseBranch()
 	if err != nil {
 		return fmt.Errorf("failed to determine base branch: %w", err)
-	}
-
-	headBranch, err := git.GetCurrentBranch()
-	if err != nil {
-		return fmt.Errorf("failed to determine current branch: %w", err)
 	}
 
 	baseRef := "origin/" + baseBranch
