@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os/exec"
@@ -33,6 +34,7 @@ var (
 	prRender   bool
 	prNoRender bool
 	prYes      bool
+	prUpdate   bool
 )
 
 func init() {
@@ -40,9 +42,10 @@ func init() {
 	prCreateCmd.Flags().BoolVar(&prDryRun, "dry-run", false, "Print the generated title and body without creating a pull request")
 	prCreateCmd.Flags().StringVar(&prModel, "model", "", "Override default model for PR generation")
 	prCreateCmd.Flags().StringVar(&prLanguage, "language", "", "Language for PR generation (e.g., english, japanese)")
-	prCreateCmd.Flags().BoolVar(&prRender, "render", true, "Render markdown body in dry-run output")
+	prCreateCmd.Flags().BoolVar(&prRender, "render", true, "Render pull request markdown body")
 	prCreateCmd.Flags().BoolVar(&prNoRender, "no-render", false, "Disable markdown rendering in dry-run output")
 	prCreateCmd.Flags().BoolVar(&prYes, "yes", false, "Automatically approve PR creation without confirmation")
+	prCreateCmd.Flags().BoolVar(&prUpdate, "update", false, "Update existing pull request when one already exists")
 
 	prCmd.AddCommand(prCreateCmd)
 }
@@ -73,12 +76,79 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	}
 	cfg.FlashModel = cfg.ResolveModel(modelToUse)
 
-	token, err := github.AuthToken(ctx)
+	currentRepo, parentRepo, err := github.RepoInfoFromGHWithParent(ctx)
 	if err != nil {
 		return err
 	}
 
-	repoInfo, err := github.RepoInfoFromGH(ctx)
+	headBranch, err := git.GetCurrentBranch()
+	if err != nil {
+		return fmt.Errorf("failed to determine current branch: %w", err)
+	}
+
+	baseRepo := currentRepo
+	if parentRepo != nil {
+		baseRepo = parentRepo
+	}
+
+	repoFullName := fmt.Sprintf("%s/%s", baseRepo.Owner, baseRepo.Name)
+	headOwners := make([]string, 0, 2)
+	status, err := git.GetPushStatus(headBranch)
+	if err != nil {
+		return fmt.Errorf("failed to determine upstream status: %w", err)
+	}
+
+	remoteName := status.RemoteName
+	if remoteName == "" {
+		remoteName = "origin"
+	}
+
+	if remoteURL, err := git.GetRemoteURL(remoteName); err == nil {
+		if remoteRepoInfo, err := github.RepoInfoFromRemoteURL(remoteURL); err == nil && remoteRepoInfo != nil {
+			headOwners = append(headOwners, remoteRepoInfo.Owner)
+		}
+	}
+	if currentRepo.Owner != "" {
+		alreadyAdded := false
+		for _, owner := range headOwners {
+			if owner == currentRepo.Owner {
+				alreadyAdded = true
+				break
+			}
+		}
+		if !alreadyAdded {
+			headOwners = append(headOwners, currentRepo.Owner)
+		}
+	}
+	if baseRepo.Owner != "" {
+		alreadyAdded := false
+		for _, owner := range headOwners {
+			if owner == baseRepo.Owner {
+				alreadyAdded = true
+				break
+			}
+		}
+		if !alreadyAdded {
+			headOwners = append(headOwners, baseRepo.Owner)
+		}
+	}
+
+	existingPR, err := github.FindPullRequest(ctx, repoFullName, headBranch, headOwners)
+	if err != nil {
+		return err
+	}
+
+	updateExisting := existingPR != nil && prUpdate
+	if existingPR != nil && !prUpdate {
+		stateLabel := existingPR.State
+		if existingPR.IsDraft {
+			stateLabel = "DRAFT"
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "Pull request already exists for branch %s (%s): #%d %s (%s)\n", headBranch, stateLabel, existingPR.Number, existingPR.Title, existingPR.URL)
+		return nil
+	}
+
+	token, err := github.AuthToken(ctx)
 	if err != nil {
 		return err
 	}
@@ -88,7 +158,7 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	template, err := github.FindPullRequestTemplate(ctx, repoRoot, token, repoInfo.Owner)
+	template, err := github.FindPullRequestTemplate(ctx, repoRoot, token, baseRepo.Owner)
 	if err != nil {
 		return fmt.Errorf("failed to resolve pull request template: %w", err)
 	}
@@ -96,11 +166,6 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	baseBranch, err := git.GetDefaultBaseBranch()
 	if err != nil {
 		return fmt.Errorf("failed to determine base branch: %w", err)
-	}
-
-	headBranch, err := git.GetCurrentBranch()
-	if err != nil {
-		return fmt.Errorf("failed to determine current branch: %w", err)
 	}
 
 	baseRef := "origin/" + baseBranch
@@ -127,7 +192,8 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 
 	if !prDryRun {
 		prContext := ui.FormatPRContext(diff, commitLog)
-		shouldContinue, err := ensureBranchPushed(cmd, headBranch, prContext)
+		var shouldContinue bool
+		shouldContinue, err = ensureBranchPushed(cmd, headBranch, prContext)
 		if err != nil {
 			return err
 		}
@@ -198,6 +264,10 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	} else {
+		confirmPrompt := "Create this pull request? (y)es / (n)o"
+		if updateExisting {
+			confirmPrompt = "Update this pull request? (y)es / (n)o"
+		}
 		prTUI := ui.NewPRTUI(aiClient, ai.PullRequestInput{
 			BaseBranch: baseBranch,
 			HeadBranch: headBranch,
@@ -206,7 +276,7 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 			Diff:       diff,
 			Template:   templateContent,
 			Language:   cfg.PRLanguage,
-		}, prRender, cfg.UseColor())
+		}, prRender, cfg.UseColor(), confirmPrompt)
 
 		content, confirmed, err := prTUI.Run()
 		if err != nil {
@@ -216,6 +286,19 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 		prContent = content
+	}
+
+	if updateExisting {
+		ghArgs := []string{"pr", "edit", fmt.Sprintf("%d", existingPR.Number), "--title", prContent.Title, "--body-file", "-"}
+
+		ghCmd := exec.Command("gh", ghArgs...)
+		ghCmd.Stdin = strings.NewReader(prContent.Body)
+		ghCmd.Stdout = cmd.OutOrStdout()
+		ghCmd.Stderr = cmd.ErrOrStderr()
+		if err := ghCmd.Run(); err != nil {
+			return fmt.Errorf("failed to update pull request: %w", err)
+		}
+		return nil
 	}
 
 	ghArgs := []string{"pr", "create", "--title", prContent.Title, "--body-file", "-", "--base", baseBranch}
@@ -268,11 +351,18 @@ func ensureBranchPushed(cmd *cobra.Command, branch string, prContext string) (bo
 	}
 
 	pushCmd := exec.Command("git", args...)
-	pushCmd.Stdout = cmd.OutOrStdout()
-	pushCmd.Stderr = cmd.ErrOrStderr()
+	var pushOutput bytes.Buffer
+	pushCmd.Stdout = &pushOutput
+	pushCmd.Stderr = &pushOutput
 	if err := pushCmd.Run(); err != nil {
-		return false, fmt.Errorf("failed to push branch: %w", err)
+		trimmed := strings.TrimSpace(pushOutput.String())
+		if trimmed == "" {
+			return false, fmt.Errorf("failed to push branch: %w", err)
+		}
+		return false, fmt.Errorf("failed to push branch: %w\n%s", err, trimmed)
 	}
+
+	fmt.Fprintln(cmd.OutOrStdout(), "Push succeeded.")
 
 	return true, nil
 }

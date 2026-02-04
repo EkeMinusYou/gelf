@@ -24,9 +24,10 @@ type prModel struct {
 	renderedBody   string
 	content        *ai.PullRequestContent
 	printedContext bool
+	confirmPrompt  string
 }
 
-func NewPRTUI(aiClient *ai.VertexAIClient, input ai.PullRequestInput, render bool, useColor bool) *prModel {
+func NewPRTUI(aiClient *ai.VertexAIClient, input ai.PullRequestInput, render bool, useColor bool, confirmPrompt string) *prModel {
 	diffSummary := git.ParseDiffSummary(input.Diff)
 	commitLines := parseCommitLines(input.CommitLog)
 
@@ -37,6 +38,12 @@ func NewPRTUI(aiClient *ai.VertexAIClient, input ai.PullRequestInput, render boo
 		commitLines: commitLines,
 		render:      render,
 		useColor:    useColor,
+		confirmPrompt: func() string {
+			if strings.TrimSpace(confirmPrompt) == "" {
+				return "Create this pull request? (y)es / (n)o"
+			}
+			return confirmPrompt
+		}(),
 	}
 }
 
@@ -61,7 +68,7 @@ func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
 
 	fmt.Printf("%s\n\n", m.buildPRContent())
 
-	confirmed, err := PromptYesNoStyled("Create this pull request? (y)es / (n)o")
+	confirmed, err := PromptYesNoStyled(m.confirmPrompt)
 	return content, confirmed, err
 }
 
