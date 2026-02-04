@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os/exec"
@@ -268,11 +269,18 @@ func ensureBranchPushed(cmd *cobra.Command, branch string, prContext string) (bo
 	}
 
 	pushCmd := exec.Command("git", args...)
-	pushCmd.Stdout = cmd.OutOrStdout()
-	pushCmd.Stderr = cmd.ErrOrStderr()
+	var pushOutput bytes.Buffer
+	pushCmd.Stdout = &pushOutput
+	pushCmd.Stderr = &pushOutput
 	if err := pushCmd.Run(); err != nil {
-		return false, fmt.Errorf("failed to push branch: %w", err)
+		trimmed := strings.TrimSpace(pushOutput.String())
+		if trimmed == "" {
+			return false, fmt.Errorf("failed to push branch: %w", err)
+		}
+		return false, fmt.Errorf("failed to push branch: %w\n%s", err, trimmed)
 	}
+
+	fmt.Fprintln(cmd.OutOrStdout(), "Push succeeded.")
 
 	return true, nil
 }
