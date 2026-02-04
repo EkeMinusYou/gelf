@@ -201,7 +201,6 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		if !confirmed {
-			fmt.Fprintln(cmd.OutOrStdout(), "Cancelled.")
 			return nil
 		}
 		prContent = content
