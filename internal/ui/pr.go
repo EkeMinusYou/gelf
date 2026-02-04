@@ -5,13 +5,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/git"
-	"github.com/charmbracelet/bubbles/spinner"
-	"golang.org/x/term"
 )
 
 type prModel struct {
@@ -73,46 +69,17 @@ func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
 }
 
 func (m *prModel) startLoadingIndicator(context string) func() {
-	if !term.IsTerminal(int(os.Stderr.Fd())) {
+	if !isTerminalWriter(os.Stderr) {
 		return func() {}
 	}
-
-	frames := spinner.Dot.Frames
-	message := loadingStyle.Render("Generating pull request message...")
-	done := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(1)
 
 	if strings.TrimSpace(context) != "" {
 		fmt.Fprintln(os.Stderr, context)
 		fmt.Fprintln(os.Stderr)
 		m.printedContext = true
 	}
-	fmt.Fprintf(os.Stderr, "\r%s %s", frames[0], message)
 
-	go func() {
-		defer wg.Done()
-		ticker := time.NewTicker(spinner.Dot.FPS)
-		defer ticker.Stop()
-
-		i := 1
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				frame := frames[i%len(frames)]
-				i++
-				fmt.Fprintf(os.Stderr, "\r%s %s", frame, message)
-			}
-		}
-	}()
-
-	return func() {
-		close(done)
-		wg.Wait()
-		fmt.Fprint(os.Stderr, "\r\033[2K\n")
-	}
+	return StartSpinner("Generating pull request message...", os.Stderr)
 }
 
 func (m *prModel) buildPRContent() string {
