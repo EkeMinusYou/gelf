@@ -117,7 +117,7 @@ func (m *prModel) View() string {
 	case prStateLoading:
 		loadingText := fmt.Sprintf("%s %s",
 			m.spinner.View(),
-			loadingStyle.Render("Generating pull request..."))
+			loadingStyle.Render("Generating pull request message..."))
 
 		return fmt.Sprintf("%s\n\n%s", formatPRContext(m.diffSummary, m.commitLines), loadingText)
 
