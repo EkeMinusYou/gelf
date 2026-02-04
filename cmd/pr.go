@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 
@@ -293,9 +294,7 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 
 		ghCmd := exec.Command("gh", ghArgs...)
 		ghCmd.Stdin = strings.NewReader(prContent.Body)
-		ghCmd.Stdout = cmd.OutOrStdout()
-		ghCmd.Stderr = cmd.ErrOrStderr()
-		if err := ghCmd.Run(); err != nil {
+		if err := runCommandWithSpinner(ghCmd, "Updating pull request...", cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
 			return fmt.Errorf("failed to update pull request: %w", err)
 		}
 		return nil
@@ -308,9 +307,7 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 
 	ghCmd := exec.Command("gh", ghArgs...)
 	ghCmd.Stdin = strings.NewReader(prContent.Body)
-	ghCmd.Stdout = cmd.OutOrStdout()
-	ghCmd.Stderr = cmd.ErrOrStderr()
-	if err := ghCmd.Run(); err != nil {
+	if err := runCommandWithSpinner(ghCmd, "Creating pull request...", cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
 		return fmt.Errorf("failed to create pull request: %w", err)
 	}
 
@@ -354,15 +351,45 @@ func ensureBranchPushed(cmd *cobra.Command, branch string, prContext string) (bo
 	var pushOutput bytes.Buffer
 	pushCmd.Stdout = &pushOutput
 	pushCmd.Stderr = &pushOutput
+	stopSpinner := ui.StartSpinner("Pushing branch...", cmd.ErrOrStderr())
 	if err := pushCmd.Run(); err != nil {
+		stopSpinner()
 		trimmed := strings.TrimSpace(pushOutput.String())
 		if trimmed == "" {
 			return false, fmt.Errorf("failed to push branch: %w", err)
 		}
 		return false, fmt.Errorf("failed to push branch: %w\n%s", err, trimmed)
 	}
+	stopSpinner()
 
 	fmt.Fprintln(cmd.OutOrStdout(), "Push succeeded.")
 
 	return true, nil
+}
+
+func runCommandWithSpinner(cmd *exec.Cmd, message string, stdout, stderr io.Writer) error {
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+
+	var outBuf bytes.Buffer
+	var errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	stopSpinner := ui.StartSpinner(message, stderr)
+	err := cmd.Run()
+	stopSpinner()
+
+	if outBuf.Len() > 0 {
+		fmt.Fprint(stdout, outBuf.String())
+	}
+	if errBuf.Len() > 0 {
+		fmt.Fprint(stderr, errBuf.String())
+	}
+
+	return err
 }
