@@ -24,6 +24,7 @@ type prModel struct {
 	aiClient     *ai.VertexAIClient
 	input        ai.PullRequestInput
 	diffSummary  git.DiffSummary
+	commitLines  []string
 	render       bool
 	useColor     bool
 	renderedBody string
@@ -46,11 +47,13 @@ func NewPRTUI(aiClient *ai.VertexAIClient, input ai.PullRequestInput, render boo
 	s.Style = loadingStyle
 
 	diffSummary := git.ParseDiffSummary(input.Diff)
+	commitLines := parseCommitLines(input.CommitLog)
 
 	return &prModel{
 		aiClient:    aiClient,
 		input:       input,
 		diffSummary: diffSummary,
+		commitLines: commitLines,
 		render:      render,
 		useColor:    useColor,
 		state:       prStateLoading,
@@ -116,11 +119,7 @@ func (m *prModel) View() string {
 			m.spinner.View(),
 			loadingStyle.Render("Generating pull request..."))
 
-		diffSummary := formatPRDiffSummary(m.diffSummary)
-		if diffSummary != "" {
-			return fmt.Sprintf("%s\n\n%s", diffSummary, loadingText)
-		}
-		return loadingText
+		return fmt.Sprintf("%s\n\n%s", formatPRContext(m.diffSummary, m.commitLines), loadingText)
 
 	case prStateConfirm:
 		header := titleStyle.Render("📝 Generated Pull Request:")
@@ -131,9 +130,9 @@ func (m *prModel) View() string {
 		}
 
 		prompt := promptStyle.Render("Create this pull request? (y)es / (n)o")
-		diffSummary := formatPRDiffSummary(m.diffSummary)
-		if diffSummary != "" {
-			return fmt.Sprintf("%s\n\n%s\n\n%s\n\n%s\n\n%s", diffSummary, header, title, body, prompt)
+		context := formatPRContext(m.diffSummary, m.commitLines)
+		if context != "" {
+			return fmt.Sprintf("%s\n\n%s\n\n%s\n\n%s\n\n%s", context, header, title, body, prompt)
 		}
 		return fmt.Sprintf("%s\n\n%s\n\n%s\n\n%s", header, title, body, prompt)
 
@@ -211,4 +210,39 @@ func formatPRDiffSummary(summary git.DiffSummary) string {
 	}
 
 	return strings.Join(parts, "\n")
+}
+
+func formatPRContext(summary git.DiffSummary, commitLines []string) string {
+	sections := []string{}
+
+	diffSummary := formatPRDiffSummary(summary)
+	if diffSummary != "" {
+		sections = append(sections, diffSummary)
+	}
+
+	if len(commitLines) > 0 {
+		sections = append(sections, formatPRCommitLog(commitLines))
+	}
+
+	return strings.Join(sections, "\n\n")
+}
+
+func formatPRCommitLog(commitLines []string) string {
+	parts := []string{diffStyle.Render("🧾 Commits:")}
+	for _, line := range commitLines {
+		parts = append(parts, fmt.Sprintf(" • %s", line))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func parseCommitLines(log string) []string {
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(log), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
