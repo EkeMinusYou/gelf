@@ -34,6 +34,7 @@ var (
 	prRender   bool
 	prNoRender bool
 	prYes      bool
+	prUpdate   bool
 )
 
 func init() {
@@ -44,6 +45,7 @@ func init() {
 	prCreateCmd.Flags().BoolVar(&prRender, "render", true, "Render pull request markdown body")
 	prCreateCmd.Flags().BoolVar(&prNoRender, "no-render", false, "Disable markdown rendering in dry-run output")
 	prCreateCmd.Flags().BoolVar(&prYes, "yes", false, "Automatically approve PR creation without confirmation")
+	prCreateCmd.Flags().BoolVar(&prUpdate, "update", false, "Update existing pull request when one already exists")
 
 	prCmd.AddCommand(prCreateCmd)
 }
@@ -136,7 +138,8 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if existingPR != nil {
+	updateExisting := existingPR != nil && prUpdate
+	if existingPR != nil && !prUpdate {
 		stateLabel := existingPR.State
 		if existingPR.IsDraft {
 			stateLabel = "DRAFT"
@@ -261,6 +264,10 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	} else {
+		confirmPrompt := "Create this pull request? (y)es / (n)o"
+		if updateExisting {
+			confirmPrompt = "Update this pull request? (y)es / (n)o"
+		}
 		prTUI := ui.NewPRTUI(aiClient, ai.PullRequestInput{
 			BaseBranch: baseBranch,
 			HeadBranch: headBranch,
@@ -269,7 +276,7 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 			Diff:       diff,
 			Template:   templateContent,
 			Language:   cfg.PRLanguage,
-		}, prRender, cfg.UseColor())
+		}, prRender, cfg.UseColor(), confirmPrompt)
 
 		content, confirmed, err := prTUI.Run()
 		if err != nil {
@@ -279,6 +286,19 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 		prContent = content
+	}
+
+	if updateExisting {
+		ghArgs := []string{"pr", "edit", fmt.Sprintf("%d", existingPR.Number), "--title", prContent.Title, "--body-file", "-"}
+
+		ghCmd := exec.Command("gh", ghArgs...)
+		ghCmd.Stdin = strings.NewReader(prContent.Body)
+		ghCmd.Stdout = cmd.OutOrStdout()
+		ghCmd.Stderr = cmd.ErrOrStderr()
+		if err := ghCmd.Run(); err != nil {
+			return fmt.Errorf("failed to update pull request: %w", err)
+		}
+		return nil
 	}
 
 	ghArgs := []string{"pr", "create", "--title", prContent.Title, "--body-file", "-", "--base", baseBranch}
