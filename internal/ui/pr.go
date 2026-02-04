@@ -1,57 +1,34 @@
 package ui
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/git"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/x/ansi"
-)
-
-type prState int
-
-const (
-	prStateLoading prState = iota
-	prStateConfirm
-	prStateDone
-	prStateError
+	"golang.org/x/term"
 )
 
 type prModel struct {
-	aiClient     *ai.VertexAIClient
-	input        ai.PullRequestInput
-	diffSummary  git.DiffSummary
-	commitLines  []string
-	render       bool
-	useColor     bool
-	renderedBody string
-	content      *ai.PullRequestContent
-	confirmed    bool
-	err          error
-	state        prState
-	spinner      spinner.Model
-	viewport     viewport.Model
-	viewWidth    int
-	viewHeight   int
-	viewReady    bool
-}
-
-type msgPRGenerated struct {
-	content      *ai.PullRequestContent
-	renderedBody string
-	err          error
+	aiClient       *ai.VertexAIClient
+	input          ai.PullRequestInput
+	diffSummary    git.DiffSummary
+	commitLines    []string
+	render         bool
+	useColor       bool
+	renderedBody   string
+	content        *ai.PullRequestContent
+	printedContext bool
 }
 
 func NewPRTUI(aiClient *ai.VertexAIClient, input ai.PullRequestInput, render bool, useColor bool) *prModel {
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = loadingStyle
-
 	diffSummary := git.ParseDiffSummary(input.Diff)
 	commitLines := parseCommitLines(input.CommitLog)
 
@@ -62,141 +39,90 @@ func NewPRTUI(aiClient *ai.VertexAIClient, input ai.PullRequestInput, render boo
 		commitLines: commitLines,
 		render:      render,
 		useColor:    useColor,
-		state:       prStateLoading,
-		spinner:     s,
 	}
-}
-
-func (m *prModel) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, m.generatePRContent())
-}
-
-func (m *prModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.viewWidth = msg.Width
-		m.viewHeight = msg.Height
-		m.updateViewportSize()
-		return m, nil
-
-	case tea.KeyMsg:
-		switch m.state {
-		case prStateLoading:
-			switch msg.String() {
-			case "q", "ctrl+c":
-				m.state = prStateDone
-				return m, tea.Quit
-			}
-		case prStateConfirm:
-			switch msg.String() {
-			case "y", "Y":
-				m.confirmed = true
-				m.state = prStateDone
-				return m, tea.Quit
-			case "n", "N", "q", "ctrl+c":
-				m.confirmed = false
-				m.state = prStateDone
-				return m, tea.Quit
-			default:
-				if m.viewReady {
-					m.viewport, cmd = m.viewport.Update(msg)
-					return m, cmd
-				}
-			}
-		case prStateDone, prStateError:
-			return m, tea.Quit
-		}
-
-	case tea.MouseMsg:
-		if m.state == prStateConfirm && m.viewReady {
-			m.viewport, cmd = m.viewport.Update(msg)
-			return m, cmd
-		}
-
-	case msgPRGenerated:
-		if msg.err != nil {
-			m.err = msg.err
-			m.state = prStateError
-		} else {
-			m.content = msg.content
-			m.renderedBody = msg.renderedBody
-			m.state = prStateConfirm
-			m.refreshViewportContent(true)
-		}
-		return m, nil
-	}
-
-	if m.state == prStateLoading {
-		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
-	}
-
-	return m, nil
-}
-
-func (m *prModel) View() string {
-	switch m.state {
-	case prStateLoading:
-		loadingText := fmt.Sprintf("%s %s",
-			m.spinner.View(),
-			loadingStyle.Render("Generating pull request message..."))
-
-		return fmt.Sprintf("%s\n\n%s", formatPRContext(m.diffSummary, m.commitLines), loadingText)
-
-	case prStateConfirm:
-		prompt := promptStyle.Render("Create this pull request? (y)es / (n)o")
-		if m.viewReady {
-			return fmt.Sprintf("%s\n\n%s", m.viewport.View(), prompt)
-		}
-		return fmt.Sprintf("%s\n\n%s", m.buildPRContent(), prompt)
-
-	case prStateError:
-		return errorStyle.Render(fmt.Sprintf("✗ Error: %v", m.err))
-
-	case prStateDone:
-		return ""
-	}
-
-	return ""
 }
 
 func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
-	p := tea.NewProgram(m, tea.WithMouseCellMotion())
-	_, err := p.Run()
+	ctx := context.Background()
+	loadingContext := formatPRContext(m.diffSummary, m.commitLines)
+	stopSpinner := m.startLoadingIndicator(loadingContext)
+	content, err := m.aiClient.GeneratePullRequestContent(ctx, m.input)
+	stopSpinner()
 	if err != nil {
 		return nil, false, err
 	}
 
-	if m.err != nil {
-		return nil, false, m.err
+	m.content = content
+
+	if m.render {
+		rendered, err := RenderMarkdown(content.Body, m.useColor)
+		if err == nil {
+			m.renderedBody = strings.TrimRight(rendered, "\n")
+		}
 	}
 
-	return m.content, m.confirmed, nil
+	fmt.Printf("%s\n\n", m.buildPRContent())
+
+	confirmed, err := promptYesNo("Create this pull request? (y)es / (n)o")
+	return content, confirmed, err
 }
 
-func (m *prModel) generatePRContent() tea.Cmd {
-	return tea.Cmd(func() tea.Msg {
-		ctx := context.Background()
-		content, err := m.aiClient.GeneratePullRequestContent(ctx, m.input)
-		if err != nil {
-			return msgPRGenerated{err: err}
-		}
+func (m *prModel) startLoadingIndicator(context string) func() {
+	if !term.IsTerminal(int(os.Stderr.Fd())) {
+		return func() {}
+	}
 
-		rendered := ""
-		if m.render {
-			rendered, err = RenderMarkdown(content.Body, m.useColor)
-			if err != nil {
-				rendered = ""
+	frames := spinner.Dot.Frames
+	message := loadingStyle.Render("Generating pull request message...")
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	if strings.TrimSpace(context) != "" {
+		fmt.Fprintln(os.Stderr, context)
+		fmt.Fprintln(os.Stderr)
+		m.printedContext = true
+	}
+	fmt.Fprintf(os.Stderr, "\r%s %s", frames[0], message)
+
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(spinner.Dot.FPS)
+		defer ticker.Stop()
+
+		i := 1
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				frame := frames[i%len(frames)]
+				i++
+				fmt.Fprintf(os.Stderr, "\r%s %s", frame, message)
 			}
 		}
+	}()
 
-		return msgPRGenerated{
-			content:      content,
-			renderedBody: strings.TrimRight(rendered, "\n"),
-		}
-	})
+	return func() {
+		close(done)
+		wg.Wait()
+		fmt.Fprint(os.Stderr, "\r\033[2K\n")
+	}
+}
+
+func promptYesNo(prompt string) (bool, error) {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Printf("%s ", prompt)
+	line, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+
+	line = strings.TrimSpace(line)
+	if strings.HasPrefix(strings.ToLower(line), "y") {
+		return true, nil
+	}
+	return false, nil
 }
 
 func (m *prModel) buildPRContent() string {
@@ -208,55 +134,15 @@ func (m *prModel) buildPRContent() string {
 	}
 
 	sections := []string{}
-	context := formatPRContext(m.diffSummary, m.commitLines)
-	if context != "" {
-		sections = append(sections, context)
+	if !m.printedContext {
+		context := formatPRContext(m.diffSummary, m.commitLines)
+		if context != "" {
+			sections = append(sections, context)
+		}
 	}
 	sections = append(sections, header, title, body)
 
 	return strings.Join(sections, "\n\n")
-}
-
-func (m *prModel) updateViewportSize() {
-	if m.viewWidth <= 0 || m.viewHeight <= 0 {
-		return
-	}
-
-	if !m.viewReady {
-		m.viewport = viewport.New(m.viewWidth, m.viewportHeight())
-		m.viewReady = true
-	} else {
-		m.viewport.Width = m.viewWidth
-		m.viewport.Height = m.viewportHeight()
-	}
-
-	m.refreshViewportContent(false)
-}
-
-func (m *prModel) refreshViewportContent(reset bool) {
-	if !m.viewReady || m.state != prStateConfirm || m.content == nil {
-		return
-	}
-
-	content := m.buildPRContent()
-	if m.viewWidth > 0 {
-		content = ansi.Wrap(content, m.viewWidth, "")
-	}
-	content = strings.TrimRight(content, "\n")
-
-	m.viewport.SetContent(content)
-	if reset {
-		m.viewport.GotoTop()
-	}
-}
-
-func (m *prModel) viewportHeight() int {
-	reserved := 2
-	height := m.viewHeight - reserved
-	if height < 1 {
-		return 1
-	}
-	return height
 }
 
 func formatPRDiffSummary(summary git.DiffSummary) string {
