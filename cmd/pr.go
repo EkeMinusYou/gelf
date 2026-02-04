@@ -1,10 +1,8 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"os/exec"
 	"strings"
 
@@ -12,7 +10,7 @@ import (
 	"github.com/EkeMinusYou/gelf/internal/config"
 	"github.com/EkeMinusYou/gelf/internal/git"
 	"github.com/EkeMinusYou/gelf/internal/github"
-	"github.com/charmbracelet/glamour"
+	"github.com/EkeMinusYou/gelf/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -137,27 +135,27 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		templateSource = template.Source
 	}
 
-	prContent, err := aiClient.GeneratePullRequestContent(ctx, ai.PullRequestInput{
-		BaseBranch: baseBranch,
-		HeadBranch: headBranch,
-		CommitLog:  commitLog,
-		DiffStat:   diffStat,
-		Diff:       diff,
-		Template:   templateContent,
-		Language:   cfg.PRLanguage,
-	})
-	if err != nil {
-		return err
-	}
-
 	if prDryRun {
+		prContent, err := aiClient.GeneratePullRequestContent(ctx, ai.PullRequestInput{
+			BaseBranch: baseBranch,
+			HeadBranch: headBranch,
+			CommitLog:  commitLog,
+			DiffStat:   diffStat,
+			Diff:       diff,
+			Template:   templateContent,
+			Language:   cfg.PRLanguage,
+		})
+		if err != nil {
+			return err
+		}
+
 		if templateContent != "" {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Using %s template: %s\n", templateSource, templatePath)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Title:\n%s\n\n", prContent.Title)
 		if prRender {
 			fmt.Fprintf(cmd.OutOrStdout(), "Body:\n")
-			rendered, err := renderMarkdown(prContent.Body)
+			rendered, err := ui.RenderMarkdown(prContent.Body, cfg.UseColor())
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Failed to render markdown: %v\n", err)
 				fmt.Fprintf(cmd.OutOrStdout(), "%s\n", prContent.Body)
@@ -170,29 +168,43 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if !prYes {
-		fmt.Fprintf(cmd.OutOrStdout(), "Title:\n%s\n\n", prContent.Title)
-		if prRender {
-			fmt.Fprintf(cmd.OutOrStdout(), "Body:\n")
-			rendered, err := renderMarkdown(prContent.Body)
-			if err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Failed to render markdown: %v\n", err)
-				fmt.Fprintf(cmd.OutOrStdout(), "%s\n", prContent.Body)
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s\n", rendered)
-			}
-		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "Body:\n%s\n", prContent.Body)
-		}
-
-		ok, err := confirmPRCreate(cmd)
+	var prContent *ai.PullRequestContent
+	if prYes {
+		prContent, err = aiClient.GeneratePullRequestContent(ctx, ai.PullRequestInput{
+			BaseBranch: baseBranch,
+			HeadBranch: headBranch,
+			CommitLog:  commitLog,
+			DiffStat:   diffStat,
+			Diff:       diff,
+			Template:   templateContent,
+			Language:   cfg.PRLanguage,
+		})
 		if err != nil {
 			return err
 		}
-		if !ok {
+	} else {
+		if !cfg.UseColor() {
+			ui.DisableColor()
+		}
+		prTUI := ui.NewPRTUI(aiClient, ai.PullRequestInput{
+			BaseBranch: baseBranch,
+			HeadBranch: headBranch,
+			CommitLog:  commitLog,
+			DiffStat:   diffStat,
+			Diff:       diff,
+			Template:   templateContent,
+			Language:   cfg.PRLanguage,
+		}, prRender, cfg.UseColor())
+
+		content, confirmed, err := prTUI.Run()
+		if err != nil {
+			return err
+		}
+		if !confirmed {
 			fmt.Fprintln(cmd.OutOrStdout(), "Cancelled.")
 			return nil
 		}
+		prContent = content
 	}
 
 	ghArgs := []string{"pr", "create", "--title", prContent.Title, "--body-file", "-", "--base", baseBranch}
@@ -209,41 +221,4 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-func renderMarkdown(markdown string) (string, error) {
-	renderer, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(0),
-	)
-	if err != nil {
-		return "", err
-	}
-
-	return renderer.Render(markdown)
-}
-
-func confirmPRCreate(cmd *cobra.Command) (bool, error) {
-	reader := bufio.NewReader(cmd.InOrStdin())
-	for {
-		fmt.Fprint(cmd.OutOrStdout(), "Create this pull request? (y)es / (n)o: ")
-		line, err := reader.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return false, err
-		}
-
-		text := strings.TrimSpace(line)
-		if text == "" && err == io.EOF {
-			return false, fmt.Errorf("confirmation required; use --yes to skip")
-		}
-
-		switch strings.ToLower(text) {
-		case "y", "yes":
-			return true, nil
-		case "n", "no":
-			return false, nil
-		default:
-			fmt.Fprintln(cmd.OutOrStdout(), "Please answer yes or no.")
-		}
-	}
 }
