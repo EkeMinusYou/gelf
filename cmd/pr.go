@@ -40,7 +40,7 @@ func init() {
 	prCreateCmd.Flags().BoolVar(&prDryRun, "dry-run", false, "Print the generated title and body without creating a pull request")
 	prCreateCmd.Flags().StringVar(&prModel, "model", "", "Override default model for PR generation")
 	prCreateCmd.Flags().StringVar(&prLanguage, "language", "", "Language for PR generation (e.g., english, japanese)")
-	prCreateCmd.Flags().BoolVar(&prRender, "render", true, "Render markdown body in dry-run output")
+	prCreateCmd.Flags().BoolVar(&prRender, "render", true, "Render pull request markdown body")
 	prCreateCmd.Flags().BoolVar(&prNoRender, "no-render", false, "Disable markdown rendering in dry-run output")
 	prCreateCmd.Flags().BoolVar(&prYes, "yes", false, "Automatically approve PR creation without confirmation")
 
