@@ -12,10 +12,14 @@ type Config struct {
 	Location       string
 	FlashModel     string
 	ProModel       string
+	BaseFlashModel string
+	BaseProModel   string
 	CommitLanguage string
 	ReviewLanguage string
 	CommitModel    string
 	ReviewModel    string
+	PRLanguage     string
+	PRModel        string
 	Color          string
 }
 
@@ -38,6 +42,10 @@ type FileConfig struct {
 		Model    string `yaml:"model"`
 		Language string `yaml:"language"`
 	} `yaml:"review"`
+	PR struct {
+		Model    string `yaml:"model"`
+		Language string `yaml:"language"`
+	} `yaml:"pr"`
 }
 
 func Load() (*Config, error) {
@@ -104,6 +112,17 @@ func Load() (*Config, error) {
 		reviewLanguage = defaultLanguage
 	}
 
+	// PR settings
+	prModel := fileConfig.PR.Model
+	if prModel == "" {
+		prModel = "pro" // default to pro model
+	}
+
+	prLanguage := fileConfig.PR.Language
+	if prLanguage == "" {
+		prLanguage = defaultLanguage
+	}
+
 	// Color settings
 	color := fileConfig.Color
 	if color == "" {
@@ -135,10 +154,14 @@ func Load() (*Config, error) {
 		Location:       location,
 		FlashModel:     actualFlashModel,
 		ProModel:       actualProModel,
+		BaseFlashModel: flashModel,
+		BaseProModel:   proModel,
 		CommitLanguage: commitLanguage,
 		ReviewLanguage: reviewLanguage,
 		CommitModel:    commitModel,
 		ReviewModel:    reviewModel,
+		PRLanguage:     prLanguage,
+		PRModel:        prModel,
 		Color:          color,
 	}, nil
 }
@@ -196,5 +219,22 @@ func (c *Config) UseColor() bool {
 		return true
 	default:
 		return true
+	}
+}
+
+func (c *Config) ResolveModel(name string) string {
+	switch name {
+	case "", "flash":
+		if c.BaseFlashModel != "" {
+			return c.BaseFlashModel
+		}
+		return c.FlashModel
+	case "pro":
+		if c.BaseProModel != "" {
+			return c.BaseProModel
+		}
+		return c.ProModel
+	default:
+		return name
 	}
 }

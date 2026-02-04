@@ -34,6 +34,21 @@ type StructuredReview struct {
 	FileReviews []FileReview `json:"fileReviews"`
 }
 
+type PullRequestInput struct {
+	BaseBranch string
+	HeadBranch string
+	CommitLog  string
+	DiffStat   string
+	Diff       string
+	Template   string
+	Language   string
+}
+
+type PullRequestContent struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
+
 type VertexAIClient struct {
 	client     *genai.Client
 	flashModel string
@@ -137,6 +152,99 @@ Respond with only the commit message, no additional text or formatting.`, langua
 	}
 
 	return part.Text, nil
+}
+
+func (v *VertexAIClient) GeneratePullRequestContent(ctx context.Context, input PullRequestInput) (*PullRequestContent, error) {
+	template := input.Template
+	if strings.TrimSpace(template) == "" {
+		template = "NONE"
+	}
+
+	prompt := fmt.Sprintf(`You are an expert software engineer writing a GitHub pull request title and description.
+
+OUTPUT FORMAT:
+- Respond with ONLY a valid JSON object.
+- No markdown fences or extra text.
+- JSON schema: {"title":"...", "body":"..."}
+
+LANGUAGE:
+- Write in %s.
+
+TITLE REQUIREMENTS:
+- Concise and specific.
+- Use imperative mood.
+- Keep it under 72 characters if possible.
+
+BODY REQUIREMENTS:
+- If PR_TEMPLATE is not "NONE", use it as the base text.
+- Preserve headings, lists, checkboxes, and HTML comments from the template.
+- Fill each section with relevant information derived from the commits and diff.
+- Replace placeholder text with concrete details.
+- If testing information is unknown, explicitly say tests were not run.
+- If PR_TEMPLATE is "NONE", use sections: Summary, Changes, Testing.
+
+BASE BRANCH: %s
+HEAD BRANCH: %s
+
+COMMITS (oldest to newest):
+%s
+
+DIFF STAT:
+%s
+
+DIFF:
+%s
+
+PR_TEMPLATE:
+%s
+`, input.Language, input.BaseBranch, input.HeadBranch, input.CommitLog, input.DiffStat, input.Diff, template)
+
+	resp, err := v.client.Models.GenerateContent(ctx, v.flashModel,
+		[]*genai.Content{
+			genai.NewUserContentFromText(prompt),
+		},
+		&genai.GenerateContentConfig{
+			Temperature: genai.Ptr(float32(0.2)),
+		})
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate pull request content: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 {
+		return nil, fmt.Errorf("no candidates in response")
+	}
+
+	if len(resp.Candidates[0].Content.Parts) == 0 {
+		return nil, fmt.Errorf("no content parts in response")
+	}
+
+	part := resp.Candidates[0].Content.Parts[0]
+	if part.Text == "" {
+		return nil, fmt.Errorf("empty text in response part")
+	}
+
+	text := strings.TrimSpace(part.Text)
+	if strings.HasPrefix(text, "```json") {
+		text = strings.TrimPrefix(text, "```json")
+		text = strings.TrimSuffix(text, "```")
+		text = strings.TrimSpace(text)
+	}
+
+	var result PullRequestContent
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON response: %w", err)
+	}
+
+	result.Title = strings.TrimSpace(result.Title)
+	result.Body = strings.TrimSpace(result.Body)
+	if result.Title == "" {
+		return nil, fmt.Errorf("generated PR title is empty")
+	}
+	if result.Body == "" {
+		return nil, fmt.Errorf("generated PR body is empty")
+	}
+
+	return &result, nil
 }
 
 // ReviewCodeStructured generates a structured review with file-specific comments
@@ -582,19 +690,19 @@ Generate comprehensive Go package documentation that follows Go community standa
 
 func (v *VertexAIClient) formatSourceCode(sourceInfo *doc.SourceInfo) string {
 	var result strings.Builder
-	
+
 	result.WriteString(fmt.Sprintf("Summary: %s\n\n", sourceInfo.Summary))
-	
+
 	// 重要なファイルのみを含める（サイズ制限）
 	maxFiles := 10
 	includedFiles := 0
-	
+
 	for _, file := range sourceInfo.Files {
 		if includedFiles >= maxFiles {
 			result.WriteString("... (additional files truncated for brevity)\n")
 			break
 		}
-		
+
 		// 大きなファイルは要約
 		if len(file.Content) > 2000 {
 			result.WriteString(fmt.Sprintf("File: %s (%s, %d bytes)\n", file.Path, file.Language, file.Size))
@@ -603,10 +711,10 @@ func (v *VertexAIClient) formatSourceCode(sourceInfo *doc.SourceInfo) string {
 			result.WriteString(fmt.Sprintf("File: %s (%s)\n", file.Path, file.Language))
 			result.WriteString(fmt.Sprintf("Content:\n%s\n\n", file.Content))
 		}
-		
+
 		includedFiles++
 	}
-	
+
 	return result.String()
 }
 
