@@ -74,7 +74,7 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	}
 	cfg.FlashModel = cfg.ResolveModel(modelToUse)
 
-	repoInfo, err := github.RepoInfoFromGH(ctx)
+	currentRepo, parentRepo, err := github.RepoInfoFromGHWithParent(ctx)
 	if err != nil {
 		return err
 	}
@@ -84,12 +84,58 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to determine current branch: %w", err)
 	}
 
-	headRef := fmt.Sprintf("%s:%s", repoInfo.Owner, headBranch)
-	repoFullName := fmt.Sprintf("%s/%s", repoInfo.Owner, repoInfo.Name)
-	existingPR, err := github.FindOpenPullRequest(ctx, repoFullName, headRef)
+	baseRepo := currentRepo
+	if parentRepo != nil {
+		baseRepo = parentRepo
+	}
+
+	repoFullName := fmt.Sprintf("%s/%s", baseRepo.Owner, baseRepo.Name)
+	headOwners := make([]string, 0, 2)
+	status, err := git.GetPushStatus(headBranch)
+	if err != nil {
+		return fmt.Errorf("failed to determine upstream status: %w", err)
+	}
+
+	remoteName := status.RemoteName
+	if remoteName == "" {
+		remoteName = "origin"
+	}
+
+	if remoteURL, err := git.GetRemoteURL(remoteName); err == nil {
+		if remoteRepoInfo, err := github.RepoInfoFromRemoteURL(remoteURL); err == nil && remoteRepoInfo != nil {
+			headOwners = append(headOwners, remoteRepoInfo.Owner)
+		}
+	}
+	if currentRepo.Owner != "" {
+		alreadyAdded := false
+		for _, owner := range headOwners {
+			if owner == currentRepo.Owner {
+				alreadyAdded = true
+				break
+			}
+		}
+		if !alreadyAdded {
+			headOwners = append(headOwners, currentRepo.Owner)
+		}
+	}
+	if baseRepo.Owner != "" {
+		alreadyAdded := false
+		for _, owner := range headOwners {
+			if owner == baseRepo.Owner {
+				alreadyAdded = true
+				break
+			}
+		}
+		if !alreadyAdded {
+			headOwners = append(headOwners, baseRepo.Owner)
+		}
+	}
+
+	existingPR, err := github.FindPullRequest(ctx, repoFullName, headBranch, headOwners)
 	if err != nil {
 		return err
 	}
+
 	if existingPR != nil {
 		stateLabel := existingPR.State
 		if existingPR.IsDraft {
@@ -109,7 +155,7 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	template, err := github.FindPullRequestTemplate(ctx, repoRoot, token, repoInfo.Owner)
+	template, err := github.FindPullRequestTemplate(ctx, repoRoot, token, baseRepo.Owner)
 	if err != nil {
 		return fmt.Errorf("failed to resolve pull request template: %w", err)
 	}
