@@ -102,13 +102,14 @@ export VERTEXAI_LOCATION="us-central1"
 ```
 
 **Note**: Model configuration and language settings can only be configured via configuration file, not environment variables.
+**Note**: If Application Default Credentials (ADC) are already available (e.g., via `gcloud auth application-default login`, Workload Identity, or GCE/GKE metadata), you can omit both credential environment variables.
 
 ### 2. Google Cloud Authentication
 
 1. Create a service account in Google Cloud Console
 2. Grant the "Vertex AI User" role
 3. Download the JSON key file
-4. Set the `GELF_CREDENTIALS` environment variable to the file path (recommended) or use `GOOGLE_APPLICATION_CREDENTIALS`
+4. Set the `GELF_CREDENTIALS` environment variable to the file path (recommended), or provide ADC via `GOOGLE_APPLICATION_CREDENTIALS` or `gcloud auth application-default login` / Workload Identity / GCE/GKE metadata
 
 ## 🚀 Usage
 
@@ -437,12 +438,12 @@ color: string            # Color output setting: "always" or "never" (default: a
 
 | Variable | Description | Default Value | Required |
 |----------|-------------|---------------|----------|
-| `GELF_CREDENTIALS` | Path to service account key file (gelf-specific, takes priority) | - | ✅* |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account key file (fallback) | - | ✅* |
+| `GELF_CREDENTIALS` | Path to service account key file (gelf-specific, takes priority) | - | ⚠️* |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account key file (ADC fallback) | - | ⚠️* |
 | `VERTEXAI_PROJECT` or `GOOGLE_CLOUD_PROJECT` | Google Cloud project ID | - | ✅ |
 | `VERTEXAI_LOCATION` | Vertex AI location | `us-central1` | ❌ |
 
-*Either `GELF_CREDENTIALS` or `GOOGLE_APPLICATION_CREDENTIALS` is required. If both are set, `GELF_CREDENTIALS` takes priority.
+*Either `GELF_CREDENTIALS` or `GOOGLE_APPLICATION_CREDENTIALS` is required unless ADC is already available (e.g., `gcloud auth application-default login`, Workload Identity, or GCE/GKE metadata). If both are set, `GELF_CREDENTIALS` takes priority.
 
 **Note**: Model configuration and language settings are only available through configuration files.
 
