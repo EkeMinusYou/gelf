@@ -363,14 +363,12 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	if prNumber != "" {
 		successHeader = fmt.Sprintf("✓ Pull request created (#%s)", prNumber)
 	}
+	if prDraft {
+		successHeader = fmt.Sprintf("%s (draft)", successHeader)
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessHeader(successHeader))
 	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessMessage(prContent.Title))
-	fmt.Fprintf(cmd.OutOrStdout(), "URL: %s\n", prURL)
-	fmt.Fprintf(cmd.OutOrStdout(), "Base: %s\n", baseBranch)
-	fmt.Fprintf(cmd.OutOrStdout(), "Head: %s\n", headBranch)
-	if prDraft {
-		fmt.Fprintln(cmd.OutOrStdout(), "Draft: true")
-	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", prURL)
 
 	return nil
 }
