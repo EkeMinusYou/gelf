@@ -409,7 +409,7 @@ func ensureBranchPushed(cmd *cobra.Command, branch string, prContext string) (bo
 	var pushOutput bytes.Buffer
 	pushCmd.Stdout = &pushOutput
 	pushCmd.Stderr = &pushOutput
-	stopSpinner := ui.StartSpinner("Pushing branch...", cmd.ErrOrStderr())
+	stopSpinner := ui.StartSpinnerInline("Pushing branch...", cmd.ErrOrStderr())
 	if err := pushCmd.Run(); err != nil {
 		stopSpinner()
 		trimmed := strings.TrimSpace(pushOutput.String())
@@ -420,7 +420,7 @@ func ensureBranchPushed(cmd *cobra.Command, branch string, prContext string) (bo
 	}
 	stopSpinner()
 
-	fmt.Fprintf(cmd.OutOrStdout(), "%s\n\n", ui.RenderSuccessHeader("✓ Push succeeded"))
+	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessHeader("✓ Push succeeded"))
 
 	return true, nil
 }
