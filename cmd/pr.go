@@ -389,7 +389,6 @@ func ensureBranchPushed(cmd *cobra.Command, branch string, prContext string) (bo
 
 	if strings.TrimSpace(prContext) != "" {
 		fmt.Fprintln(cmd.ErrOrStderr(), prContext)
-		fmt.Fprintln(cmd.ErrOrStderr())
 	}
 
 	prompt := fmt.Sprintf("Current branch is not pushed to %s. Push now? (y)es / (n)o", remoteName)
@@ -421,7 +420,7 @@ func ensureBranchPushed(cmd *cobra.Command, branch string, prContext string) (bo
 	}
 	stopSpinner()
 
-	fmt.Fprintln(cmd.OutOrStdout(), "Push succeeded.")
+	fmt.Fprintf(cmd.OutOrStdout(), "%s\n\n", ui.RenderSuccessHeader("✓ Push succeeded"))
 
 	return true, nil
 }
