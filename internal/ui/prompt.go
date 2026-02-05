@@ -12,21 +12,32 @@ import (
 )
 
 func PromptYesNoStyled(prompt string) (bool, error) {
-	return PromptYesNo(promptStyle.Render(prompt))
+	return PromptYesNoStyledWithWriter(prompt, os.Stdout)
 }
 
 func PromptYesNo(prompt string) (bool, error) {
+	return PromptYesNoWithWriter(prompt, os.Stdout)
+}
+
+func PromptYesNoStyledWithWriter(prompt string, out io.Writer) (bool, error) {
+	return PromptYesNoWithWriter(promptStyle.Render(prompt), out)
+}
+
+func PromptYesNoWithWriter(prompt string, out io.Writer) (bool, error) {
+	if out == nil {
+		out = os.Stdout
+	}
 	if term.IsTerminal(int(os.Stdin.Fd())) {
 		m := &yesNoModel{prompt: prompt}
-		p := tea.NewProgram(m)
+		p := tea.NewProgram(m, tea.WithOutput(out))
 		if _, err := p.Run(); err != nil {
 			return false, err
 		}
-		fmt.Fprintln(os.Stdout)
+		fmt.Fprintln(out)
 		return m.confirmed, nil
 	}
 
-	fmt.Printf("%s ", prompt)
+	fmt.Fprintf(out, "%s ", prompt)
 
 	reader := bufio.NewReader(os.Stdin)
 	line, err := reader.ReadString('\n')
