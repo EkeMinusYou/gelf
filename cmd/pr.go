@@ -5,7 +5,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
@@ -307,8 +310,39 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 
 	ghCmd := exec.Command("gh", ghArgs...)
 	ghCmd.Stdin = strings.NewReader(prContent.Body)
-	if err := runCommandWithSpinner(ghCmd, "Creating pull request...", cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+	ghOut, ghErr, err := runCommandWithSpinnerCapture(ghCmd, "Creating pull request...", cmd.ErrOrStderr())
+	if err != nil {
+		if strings.TrimSpace(ghOut) != "" {
+			fmt.Fprint(cmd.OutOrStdout(), ghOut)
+		}
+		if strings.TrimSpace(ghErr) != "" {
+			fmt.Fprint(cmd.ErrOrStderr(), ghErr)
+		}
 		return fmt.Errorf("failed to create pull request: %w", err)
+	}
+	if strings.TrimSpace(ghErr) != "" {
+		fmt.Fprint(cmd.ErrOrStderr(), ghErr)
+	}
+
+	prURL := extractFirstURL(ghOut)
+	if prURL == "" {
+		if strings.TrimSpace(ghOut) != "" {
+			fmt.Fprint(cmd.OutOrStdout(), ghOut)
+		}
+		return nil
+	}
+
+	prNumber := pullNumberFromURL(prURL)
+	if prNumber != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "Pull request created: #%s %s\n", prNumber, prContent.Title)
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "Pull request created: %s\n", prContent.Title)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "URL: %s\n", prURL)
+	fmt.Fprintf(cmd.OutOrStdout(), "Base: %s\n", baseBranch)
+	fmt.Fprintf(cmd.OutOrStdout(), "Head: %s\n", headBranch)
+	if prDraft {
+		fmt.Fprintln(cmd.OutOrStdout(), "Draft: true")
 	}
 
 	return nil
@@ -392,4 +426,42 @@ func runCommandWithSpinner(cmd *exec.Cmd, message string, stdout, stderr io.Writ
 	}
 
 	return err
+}
+
+func runCommandWithSpinnerCapture(cmd *exec.Cmd, message string, stderr io.Writer) (string, string, error) {
+	if stderr == nil {
+		stderr = io.Discard
+	}
+
+	var outBuf bytes.Buffer
+	var errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	stopSpinner := ui.StartSpinner(message, stderr)
+	err := cmd.Run()
+	stopSpinner()
+
+	return outBuf.String(), errBuf.String(), err
+}
+
+func extractFirstURL(output string) string {
+	re := regexp.MustCompile(`https?://\S+`)
+	return re.FindString(output)
+}
+
+func pullNumberFromURL(prURL string) string {
+	parsed, err := url.Parse(prURL)
+	if err != nil {
+		return ""
+	}
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	for i := 0; i+1 < len(segments); i++ {
+		if segments[i] == "pull" || segments[i] == "pulls" {
+			if _, err := strconv.Atoi(segments[i+1]); err == nil {
+				return segments[i+1]
+			}
+		}
+	}
+	return ""
 }
