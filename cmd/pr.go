@@ -297,8 +297,24 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 
 		ghCmd := exec.Command("gh", ghArgs...)
 		ghCmd.Stdin = strings.NewReader(prContent.Body)
-		if err := runCommandWithSpinner(ghCmd, "Updating pull request...", cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+		ghOut, ghErr, err := runCommandWithSpinnerCapture(ghCmd, "Updating pull request...", cmd.ErrOrStderr())
+		if err != nil {
+			if strings.TrimSpace(ghOut) != "" {
+				fmt.Fprint(cmd.OutOrStdout(), ghOut)
+			}
+			if strings.TrimSpace(ghErr) != "" {
+				fmt.Fprint(cmd.ErrOrStderr(), ghErr)
+			}
 			return fmt.Errorf("failed to update pull request: %w", err)
+		}
+		successHeader := "✓ Pull request updated"
+		if existingPR.Number > 0 {
+			successHeader = fmt.Sprintf("✓ Pull request updated (#%d)", existingPR.Number)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessHeader(successHeader))
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessMessage(prContent.Title))
+		if existingPR.URL != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", existingPR.URL)
 		}
 		return nil
 	}
@@ -320,24 +336,35 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		}
 		return fmt.Errorf("failed to create pull request: %w", err)
 	}
-	if strings.TrimSpace(ghErr) != "" {
-		fmt.Fprint(cmd.ErrOrStderr(), ghErr)
-	}
 
-	prURL := extractFirstURL(ghOut)
+	ghOutTrim := strings.TrimSpace(ghOut)
+	ghErrTrim := strings.TrimSpace(ghErr)
+	combinedOutput := strings.TrimSpace(strings.Join([]string{ghOutTrim, ghErrTrim}, "\n"))
+	prURL := extractFirstURL(combinedOutput)
 	if prURL == "" {
-		if strings.TrimSpace(ghOut) != "" {
+		if ghOutTrim != "" {
 			fmt.Fprint(cmd.OutOrStdout(), ghOut)
+		}
+		if ghErrTrim != "" {
+			fmt.Fprint(cmd.ErrOrStderr(), ghErr)
 		}
 		return nil
 	}
 
-	prNumber := pullNumberFromURL(prURL)
-	if prNumber != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "Pull request created: #%s %s\n", prNumber, prContent.Title)
-	} else {
-		fmt.Fprintf(cmd.OutOrStdout(), "Pull request created: %s\n", prContent.Title)
+	if ghErrTrim != "" {
+		errWithoutURL := strings.TrimSpace(strings.ReplaceAll(ghErrTrim, prURL, ""))
+		if errWithoutURL != "" {
+			fmt.Fprint(cmd.ErrOrStderr(), errWithoutURL)
+		}
 	}
+
+	prNumber := pullNumberFromURL(prURL)
+	successHeader := "✓ Pull request created"
+	if prNumber != "" {
+		successHeader = fmt.Sprintf("✓ Pull request created (#%s)", prNumber)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessHeader(successHeader))
+	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessMessage(prContent.Title))
 	fmt.Fprintf(cmd.OutOrStdout(), "URL: %s\n", prURL)
 	fmt.Fprintf(cmd.OutOrStdout(), "Base: %s\n", baseBranch)
 	fmt.Fprintf(cmd.OutOrStdout(), "Head: %s\n", headBranch)
