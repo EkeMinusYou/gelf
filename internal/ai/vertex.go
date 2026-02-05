@@ -129,7 +129,7 @@ Respond with only the commit message, no additional text or formatting.`, langua
 
 	resp, err := v.client.Models.GenerateContent(ctx, v.flashModel,
 		[]*genai.Content{
-			genai.NewUserContentFromText(prompt),
+			genai.NewContentFromText(prompt, genai.RoleUser),
 		},
 		&genai.GenerateContentConfig{
 			Temperature: genai.Ptr(float32(0.3)),
@@ -201,7 +201,7 @@ PR_TEMPLATE:
 
 	resp, err := v.client.Models.GenerateContent(ctx, v.flashModel,
 		[]*genai.Content{
-			genai.NewUserContentFromText(prompt),
+			genai.NewContentFromText(prompt, genai.RoleUser),
 		},
 		&genai.GenerateContentConfig{
 			Temperature: genai.Ptr(float32(0.2)),
@@ -370,7 +370,7 @@ File diff:
 
 	resp, err := v.client.Models.GenerateContent(ctx, v.flashModel,
 		[]*genai.Content{
-			genai.NewUserContentFromText(prompt),
+			genai.NewContentFromText(prompt, genai.RoleUser),
 		},
 		&genai.GenerateContentConfig{
 			Temperature: genai.Ptr(float32(0.1)),
@@ -452,7 +452,7 @@ Provide a concise summary of the overall code quality and main areas of concern.
 
 	resp, err := v.client.Models.GenerateContent(ctx, v.flashModel,
 		[]*genai.Content{
-			genai.NewUserContentFromText(prompt),
+			genai.NewContentFromText(prompt, genai.RoleUser),
 		},
 		&genai.GenerateContentConfig{
 			Temperature: genai.Ptr(float32(0.3)),
@@ -481,7 +481,7 @@ func (v *VertexAIClient) GenerateDocumentation(ctx context.Context, sourceInfo *
 
 	resp, err := v.client.Models.GenerateContent(ctx, v.proModel,
 		[]*genai.Content{
-			genai.NewUserContentFromText(prompt),
+			genai.NewContentFromText(prompt, genai.RoleUser),
 		},
 		&genai.GenerateContentConfig{
 			Temperature: genai.Ptr(float32(0.3)),
