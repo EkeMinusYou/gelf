@@ -5,7 +5,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
@@ -294,8 +297,24 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 
 		ghCmd := exec.Command("gh", ghArgs...)
 		ghCmd.Stdin = strings.NewReader(prContent.Body)
-		if err := runCommandWithSpinner(ghCmd, "Updating pull request...", cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+		ghOut, ghErr, err := runCommandWithSpinnerCapture(ghCmd, "Updating pull request...", cmd.ErrOrStderr())
+		if err != nil {
+			if strings.TrimSpace(ghOut) != "" {
+				fmt.Fprint(cmd.OutOrStdout(), ghOut)
+			}
+			if strings.TrimSpace(ghErr) != "" {
+				fmt.Fprint(cmd.ErrOrStderr(), ghErr)
+			}
 			return fmt.Errorf("failed to update pull request: %w", err)
+		}
+		successHeader := "✓ Pull request updated"
+		if existingPR.Number > 0 {
+			successHeader = fmt.Sprintf("✓ Pull request updated (#%d)", existingPR.Number)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessHeader(successHeader))
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessMessage(prContent.Title))
+		if existingPR.URL != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", existingPR.URL)
 		}
 		return nil
 	}
@@ -307,9 +326,49 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 
 	ghCmd := exec.Command("gh", ghArgs...)
 	ghCmd.Stdin = strings.NewReader(prContent.Body)
-	if err := runCommandWithSpinner(ghCmd, "Creating pull request...", cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+	ghOut, ghErr, err := runCommandWithSpinnerCapture(ghCmd, "Creating pull request...", cmd.ErrOrStderr())
+	if err != nil {
+		if strings.TrimSpace(ghOut) != "" {
+			fmt.Fprint(cmd.OutOrStdout(), ghOut)
+		}
+		if strings.TrimSpace(ghErr) != "" {
+			fmt.Fprint(cmd.ErrOrStderr(), ghErr)
+		}
 		return fmt.Errorf("failed to create pull request: %w", err)
 	}
+
+	ghOutTrim := strings.TrimSpace(ghOut)
+	ghErrTrim := strings.TrimSpace(ghErr)
+	combinedOutput := strings.TrimSpace(strings.Join([]string{ghOutTrim, ghErrTrim}, "\n"))
+	prURL := extractFirstURL(combinedOutput)
+	if prURL == "" {
+		if ghOutTrim != "" {
+			fmt.Fprint(cmd.OutOrStdout(), ghOut)
+		}
+		if ghErrTrim != "" {
+			fmt.Fprint(cmd.ErrOrStderr(), ghErr)
+		}
+		return nil
+	}
+
+	if ghErrTrim != "" {
+		errWithoutURL := strings.TrimSpace(strings.ReplaceAll(ghErrTrim, prURL, ""))
+		if errWithoutURL != "" {
+			fmt.Fprint(cmd.ErrOrStderr(), errWithoutURL)
+		}
+	}
+
+	prNumber := pullNumberFromURL(prURL)
+	successHeader := "✓ Pull request created"
+	if prNumber != "" {
+		successHeader = fmt.Sprintf("✓ Pull request created (#%s)", prNumber)
+	}
+	if prDraft {
+		successHeader = fmt.Sprintf("%s (draft)", successHeader)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessHeader(successHeader))
+	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessMessage(prContent.Title))
+	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", prURL)
 
 	return nil
 }
@@ -329,12 +388,11 @@ func ensureBranchPushed(cmd *cobra.Command, branch string, prContext string) (bo
 	}
 
 	if strings.TrimSpace(prContext) != "" {
-		fmt.Fprintln(cmd.ErrOrStderr(), prContext)
-		fmt.Fprintln(cmd.ErrOrStderr())
+		fmt.Fprintf(cmd.ErrOrStderr(), "%s\n\n", prContext)
 	}
 
 	prompt := fmt.Sprintf("Current branch is not pushed to %s. Push now? (y)es / (n)o", remoteName)
-	confirmed, err := ui.PromptYesNoStyled(prompt)
+	confirmed, err := ui.PromptYesNoStyledWithWriter(prompt, cmd.ErrOrStderr())
 	if err != nil {
 		return false, err
 	}
@@ -351,7 +409,7 @@ func ensureBranchPushed(cmd *cobra.Command, branch string, prContext string) (bo
 	var pushOutput bytes.Buffer
 	pushCmd.Stdout = &pushOutput
 	pushCmd.Stderr = &pushOutput
-	stopSpinner := ui.StartSpinner("Pushing branch...", cmd.ErrOrStderr())
+	stopSpinner := ui.StartSpinnerInline("Pushing branch...", cmd.ErrOrStderr())
 	if err := pushCmd.Run(); err != nil {
 		stopSpinner()
 		trimmed := strings.TrimSpace(pushOutput.String())
@@ -362,7 +420,7 @@ func ensureBranchPushed(cmd *cobra.Command, branch string, prContext string) (bo
 	}
 	stopSpinner()
 
-	fmt.Fprintln(cmd.OutOrStdout(), "Push succeeded.")
+	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessHeader("✓ Push succeeded"))
 
 	return true, nil
 }
@@ -392,4 +450,42 @@ func runCommandWithSpinner(cmd *exec.Cmd, message string, stdout, stderr io.Writ
 	}
 
 	return err
+}
+
+func runCommandWithSpinnerCapture(cmd *exec.Cmd, message string, stderr io.Writer) (string, string, error) {
+	if stderr == nil {
+		stderr = io.Discard
+	}
+
+	var outBuf bytes.Buffer
+	var errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	stopSpinner := ui.StartSpinner(message, stderr)
+	err := cmd.Run()
+	stopSpinner()
+
+	return outBuf.String(), errBuf.String(), err
+}
+
+func extractFirstURL(output string) string {
+	re := regexp.MustCompile(`https?://\S+`)
+	return re.FindString(output)
+}
+
+func pullNumberFromURL(prURL string) string {
+	parsed, err := url.Parse(prURL)
+	if err != nil {
+		return ""
+	}
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	for i := 0; i+1 < len(segments); i++ {
+		if segments[i] == "pull" || segments[i] == "pulls" {
+			if _, err := strconv.Atoi(segments[i+1]); err == nil {
+				return segments[i+1]
+			}
+		}
+	}
+	return ""
 }

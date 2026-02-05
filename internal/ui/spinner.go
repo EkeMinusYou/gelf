@@ -14,6 +14,16 @@ import (
 // StartSpinner renders a simple loading spinner on the given writer.
 // It returns a stop function that clears the line and prints a newline.
 func StartSpinner(message string, out io.Writer) func() {
+	return startSpinner(message, out, true)
+}
+
+// StartSpinnerInline renders a simple loading spinner on the given writer.
+// It returns a stop function that clears the line without printing a newline.
+func StartSpinnerInline(message string, out io.Writer) func() {
+	return startSpinner(message, out, false)
+}
+
+func startSpinner(message string, out io.Writer, newline bool) func() {
 	if out == nil {
 		out = os.Stderr
 	}
@@ -50,7 +60,11 @@ func StartSpinner(message string, out io.Writer) func() {
 	return func() {
 		close(done)
 		wg.Wait()
-		fmt.Fprint(out, "\r\033[2K\n")
+		if newline {
+			fmt.Fprint(out, "\r\033[2K\n")
+			return
+		}
+		fmt.Fprint(out, "\r\033[2K")
 	}
 }
 
