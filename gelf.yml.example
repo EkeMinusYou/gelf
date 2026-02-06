@@ -9,13 +9,13 @@ vertex_ai:
   # Google Cloud Project ID for Vertex AI
   project_id: "your-gcp-project-id"
   
-  # Vertex AI region/location (default: us-central1)
-  location: "us-central1"
+  # Vertex AI region/location (default: global)
+  location: "global"
 
 # Model definitions
 model:
-  flash: gemini-2.5-flash
-  pro: gemini-2.5-pro
+  flash: gemini-3-flash-preview
+  pro: gemini-3-pro-preview
 
 # Default language for all operations (default: english)
 # Examples: english, japanese, spanish, french, german, chinese, korean
