@@ -15,9 +15,7 @@ type Config struct {
 	BaseFlashModel string
 	BaseProModel   string
 	CommitLanguage string
-	ReviewLanguage string
 	CommitModel    string
-	ReviewModel    string
 	PRLanguage     string
 	PRModel        string
 	Color          string
@@ -38,10 +36,6 @@ type FileConfig struct {
 		Model    string `yaml:"model"`
 		Language string `yaml:"language"`
 	} `yaml:"commit"`
-	Review struct {
-		Model    string `yaml:"model"`
-		Language string `yaml:"language"`
-	} `yaml:"review"`
 	PR struct {
 		Model    string `yaml:"model"`
 		Language string `yaml:"language"`
@@ -101,17 +95,6 @@ func Load() (*Config, error) {
 		commitLanguage = defaultLanguage
 	}
 
-	// Review settings
-	reviewModel := fileConfig.Review.Model
-	if reviewModel == "" {
-		reviewModel = "pro" // default to pro model
-	}
-
-	reviewLanguage := fileConfig.Review.Language
-	if reviewLanguage == "" {
-		reviewLanguage = defaultLanguage
-	}
-
 	// PR settings
 	prModel := fileConfig.PR.Model
 	if prModel == "" {
@@ -130,7 +113,7 @@ func Load() (*Config, error) {
 	}
 
 	// Resolve actual model names
-	var actualFlashModel, actualProModel string
+	var actualFlashModel string
 	if commitModel == "flash" {
 		actualFlashModel = flashModel
 	} else if commitModel == "pro" {
@@ -140,26 +123,15 @@ func Load() (*Config, error) {
 		actualFlashModel = commitModel
 	}
 
-	if reviewModel == "flash" {
-		actualProModel = flashModel
-	} else if reviewModel == "pro" {
-		actualProModel = proModel
-	} else {
-		// Custom model name
-		actualProModel = reviewModel
-	}
-
 	return &Config{
 		ProjectID:      projectID,
 		Location:       location,
 		FlashModel:     actualFlashModel,
-		ProModel:       actualProModel,
+		ProModel:       proModel,
 		BaseFlashModel: flashModel,
 		BaseProModel:   proModel,
 		CommitLanguage: commitLanguage,
-		ReviewLanguage: reviewLanguage,
 		CommitModel:    commitModel,
-		ReviewModel:    reviewModel,
 		PRLanguage:     prLanguage,
 		PRModel:        prModel,
 		Color:          color,

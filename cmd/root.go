@@ -51,8 +51,6 @@ func Execute() error {
 
 func init() {
 	rootCmd.AddCommand(commitCmd)
-	rootCmd.AddCommand(reviewCmd)
-	rootCmd.AddCommand(docCmd)
 	rootCmd.AddCommand(prCmd)
 	rootCmd.AddCommand(versionCmd)
 
