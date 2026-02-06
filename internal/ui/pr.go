@@ -62,7 +62,8 @@ func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
 		}
 	}
 
-	fmt.Printf("%s\n\n", m.buildPRContent())
+	fmt.Printf("%s\n", m.buildPRContent())
+	fmt.Println()
 
 	confirmed, err := PromptYesNoStyled(m.confirmPrompt)
 	return content, confirmed, err
