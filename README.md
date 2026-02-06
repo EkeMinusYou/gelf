@@ -1,17 +1,16 @@
 # 🚀 gelf
 
-gelf is a Go-based CLI tool that automatically generates Git commit messages and provides AI-powered code reviews using Vertex AI (Gemini). It analyzes git changes and provides intelligent feedback through a modern, interactive TUI interface built with Bubble Tea.
+gelf is a Go-based CLI tool that generates Git commit messages and AI-assisted pull request titles/descriptions using Vertex AI (Gemini). It analyzes git changes and provides a modern, interactive TUI interface built with Bubble Tea.
 
 ## ✨ Features
 
 - 🤖 **AI-Powered**: Intelligent commit message generation using Vertex AI (Gemini)
-- 🔍 **Code Review**: AI-powered code review with streaming real-time feedback
 - 📝 **PR Creation**: Generate pull request titles and descriptions with AI
 - 🎨 **Clean TUI**: Simple and intuitive user interface built with Bubble Tea  
-- ⚡ **Fast Processing**: Real-time progress indicators and streaming responses
-- 🛡️ **Safe Operations**: Only operates on staged changes for secure workflow
+- ⚡ **Fast Processing**: Real-time progress indicators during generation
+- 🛡️ **Safe Operations**: Commit generation uses staged changes for a secure workflow
 - 🌐 **Cross-Platform**: Works seamlessly across different operating systems
-- 🌍 **Multi-language Support**: Generate commit messages and code reviews in multiple languages
+- 🌍 **Multi-language Support**: Generate commit messages and PRs in multiple languages
 
 ## 🛠️ Installation
 
@@ -72,10 +71,6 @@ commit:
   model: "flash"     # optional, default: flash
   language: "english"  # optional, inherits from global language
 
-review:
-  model: "pro"       # optional, default: pro
-  language: "english"  # optional, inherits from global language
-
 pr:
   model: "pro"       # optional, default: pro
   language: "english"  # optional, inherits from global language
@@ -133,25 +128,6 @@ gelf commit
    - The commit will be executed automatically upon approval
    - Success message displays after TUI exits
 
-### Code Review
-
-1. Review unstaged changes:
-```bash
-gelf review
-```
-
-2. Review staged changes:
-```bash
-gelf review --staged
-```
-
-The review feature provides:
-   - Real-time streaming AI analysis
-   - Comprehensive code review feedback
-   - Security vulnerability detection
-   - Performance and maintainability suggestions
-   - No interactive prompts - displays results directly
-
 ### Pull Request Creation
 
 Generate pull requests with AI-generated titles and descriptions based on committed changes:
@@ -169,34 +145,6 @@ Options:
 - `--language` to set the output language
 - `--yes` to skip confirmation prompt
 
-### Documentation Generation
-
-Generate AI-powered documentation for your codebase:
-
-```bash
-# Generate README documentation
-gelf doc --src . --dst README.md --template readme
-
-# Generate API documentation 
-gelf doc --src ./api --dst docs/api.md --template api
-
-# Generate architecture documentation
-gelf doc --src . --dst docs/architecture.md --template architecture
-
-# Generate changelog from git history
-gelf doc --src . --dst CHANGELOG.md --template changelog
-
-# Generate Go-style documentation
-gelf doc --src ./pkg --dst docs/godoc.md --template godoc
-```
-
-The documentation feature provides:
-   - AI-powered analysis of source code structure
-   - Multiple documentation templates (readme, api, changelog, architecture, godoc)
-   - Support for multiple output formats (markdown, html, json)
-   - Interactive TUI with progress indicators
-   - Customizable language output
-
 ### Command Options
 
 ```bash
@@ -205,9 +153,6 @@ gelf --help
 
 # Show commit command help
 gelf commit --help
-
-# Show review command help
-gelf review --help
 
 # Generate commit message with TUI interface (default behavior)
 gelf commit
@@ -227,21 +172,6 @@ gelf commit --language japanese
 # Automatically approve commit message
 gelf commit --yes
 
-# Review unstaged changes (default)
-gelf review
-
-# Review staged changes
-gelf review --staged
-
-# Use specific model for review
-gelf review --model gemini-2.0-flash-exp
-
-# Disable markdown styling in review output (for plain text)
-gelf review --no-style
-
-# Generate code review in a specific language
-gelf review --language japanese
-
 # Create a pull request with AI-generated title/body
 gelf pr create
 
@@ -260,22 +190,11 @@ gelf pr create --model gemini-2.0-flash-exp --language japanese
 # Skip confirmation prompt
 gelf pr create --yes
 
-# Generate documentation
-gelf doc --src . --dst README.md --template readme
-
-# Generate documentation with specific format
-gelf doc --src ./src --dst docs/api.html --template api --format html
-
-# Generate documentation with specific model and language
-gelf doc --src . --dst README_JP.md --template readme --model gemini-2.0-flash-exp --language japanese
-
-# Show documentation command help
-gelf doc --help
 ```
 
 ## 🌍 Language Support
 
-gelf supports generating commit messages, code reviews, and documentation in multiple languages. You can configure language settings both through configuration files and command-line options.
+gelf supports generating commit messages and pull request content in multiple languages. You can configure language settings both through configuration files and command-line options.
 
 ### Supported Languages
 
@@ -295,14 +214,11 @@ While gelf can work with any language supported by Gemini models, common example
 ```bash
 # Set language for specific commands
 gelf commit --language japanese
-gelf review --language spanish
 gelf pr create --language french
-gelf doc --src . --dst README.md --template readme --language french
 
 # Use different languages for different operations
 gelf commit --language english
-gelf review --language japanese
-gelf doc --src . --dst docs/README_ES.md --template readme --language spanish
+gelf pr create --language japanese
 ```
 
 #### 2. Configuration File
@@ -312,22 +228,16 @@ language: "japanese"  # Global default language
 commit:
   language: "japanese"  # Language for commit messages
 
-review:
-  language: "english"   # Language for code reviews
-
 pr:
   language: "english"   # Language for pull request titles and descriptions
-
-doc:
-  language: "english"   # Language for documentation generation
 ```
 
 #### 3. Defaults
-If no language is specified, commit, review, and documentation generation will use English.
+If no language is specified, commit messages and PR content will use English.
 
 ### Priority Order
 1. Command-line `--language` flag (highest priority)
-2. Configuration file command-specific settings (`commit.language`/`review.language`/`pr.language`/`doc.language`)
+2. Configuration file command-specific settings (`commit.language`/`pr.language`)
 3. Configuration file global setting (`language`)
 4. Default value (`english`)
 
@@ -338,13 +248,12 @@ This allows you to set a global default language, override it for specific comma
 ### Architecture
 
 - **Commit Target**: Staged changes only (`git diff --staged`)
-- **Review Target**: Both staged (`git diff --staged`) and unstaged (`git diff`) changes
+- **PR Target**: Committed changes between base branch and `HEAD`
 - **AI Provider**: Vertex AI (Gemini models)
 - **Default Flash Model**: gemini-2.5-flash
 - **Default Pro Model**: gemini-2.5-pro
 - **UI Framework**: Bubble Tea (TUI)
 - **CLI Framework**: Cobra
-- **Streaming**: Real-time AI response streaming for code reviews
 
 ### Project Structure
 
@@ -352,9 +261,7 @@ This allows you to set a global default language, override it for specific comma
 cmd/
 ├── root.go          # Root command definition
 ├── commit.go        # Commit command implementation
-├── review.go        # Review command implementation
-├── pr.go            # Pull request command implementation
-└── doc.go           # Documentation generation command implementation
+└── pr.go            # Pull request command implementation
 internal/
 ├── git/
 │   ├── diff.go      # Git operations (staged and unstaged diffs)
@@ -362,11 +269,9 @@ internal/
 ├── github/
 │   └── template.go  # GitHub PR template resolution
 ├── ai/
-│   └── vertex.go    # Vertex AI integration (commit messages, code review, and documentation)
+│   └── vertex.go    # Vertex AI integration (commit messages and PR generation)
 ├── ui/
-│   └── tui.go       # Bubble Tea TUI implementation (commit, review, and documentation)
-├── doc/
-│   └── analyzer.go  # Source code analysis for documentation generation
+│   └── tui.go       # Bubble Tea TUI implementation (commit)
 └── config/
     └── config.go    # Configuration management (API keys etc)
 main.go             # Application entry point
@@ -374,21 +279,12 @@ main.go             # Application entry point
 
 ## 🎨 User Interface
 
-The application provides a clean, interactive terminal interface:
+The application provides a clean, interactive terminal interface for commit generation:
 
 ### Commit Workflow
 - Loading indicator while generating commit messages
 - Review screen for generated commit messages with approval options
 - Success confirmation after successful commits
-
-### Review Workflow  
-- Real-time streaming AI analysis display
-- Comprehensive code review feedback without interactive prompts
-
-### Documentation Workflow
-- Loading indicator while analyzing source code
-- Real-time progress updates during AI document generation
-- Success confirmation with output file location
 
 The interface features color-coded states, animated progress indicators, and intuitive keyboard controls for a smooth user experience.
 
@@ -419,17 +315,9 @@ commit:
   model: string          # Model for commits: "flash", "pro", or custom (default: flash)
   language: string       # Language for commit messages (inherits from global if not set)
 
-review:
-  model: string          # Model for reviews: "flash", "pro", or custom (default: pro)
-  language: string       # Language for code reviews (inherits from global if not set)
-
 pr:
   model: string          # Model for pull requests: "flash", "pro", or custom (default: pro)
   language: string       # Language for pull request titles and descriptions (inherits from global if not set)
-
-doc:
-  model: string          # Model for documentation: "flash", "pro", or custom (default: pro)
-  language: string       # Language for documentation generation (inherits from global if not set)
 
 color: string            # Color output setting: "always" or "never" (default: always)
 ```
@@ -473,9 +361,7 @@ go test ./...                # Run tests
 go mod tidy                  # Tidy dependencies
 go run main.go commit        # Run commit command in development
 go run main.go commit --dry-run  # Run message generation only
-go run main.go review        # Run review command in development
-go run main.go review --staged  # Run review for staged changes
-go run main.go doc --src . --dst README.md --template readme  # Run documentation generation
+go run main.go pr create     # Run PR creation in development
 ```
 
 ## 📦 Dependencies
@@ -485,7 +371,7 @@ go run main.go doc --src . --dst README.md --template readme  # Run documentatio
 - [`github.com/charmbracelet/bubbletea`](https://github.com/charmbracelet/bubbletea) - TUI framework
 - [`github.com/charmbracelet/lipgloss`](https://github.com/charmbracelet/lipgloss) - Styling and layout
 - [`github.com/charmbracelet/bubbles`](https://github.com/charmbracelet/bubbles) - TUI components (spinner)
-- [`github.com/charmbracelet/glamour`](https://github.com/charmbracelet/glamour) - Markdown rendering for code reviews
+- [`github.com/charmbracelet/glamour`](https://github.com/charmbracelet/glamour) - Markdown rendering for pull request bodies
 - [`github.com/spf13/cobra`](https://github.com/spf13/cobra) - CLI framework
 - [`gopkg.in/yaml.v3`](https://gopkg.in/yaml.v3) - YAML configuration file support
 

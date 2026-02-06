@@ -4,7 +4,7 @@
 
 ## プロジェクト概要
 
-gelfは、Vertex AI (Gemini) を使用してGitコミットメッセージの自動生成とAIによるコードレビューを提供するGo製CLIツールです。ステージング済み・未ステージ変更を分析し、Bubble Teaで構築されたインタラクティブなTUIインターフェースを通じて適切なコミットメッセージ生成と包括的なコードレビューフィードバックを提供します。
+gelfは、Vertex AI (Gemini) を使用してGitコミットメッセージの自動生成とAIによるPRタイトル/本文生成を提供するGo製CLIツールです。git変更を分析し、Bubble Teaで構築されたインタラクティブなTUIインターフェースを通じて適切なコミットメッセージ生成を提供します。
 
 ## アプリケーションアーキテクチャ
 
@@ -16,24 +16,24 @@ gelfは、Vertex AI (Gemini) を使用してGitコミットメッセージの自
 3. **ユーザー確認** - 生成されたメッセージをTUIでYes/No/編集プロンプトと共に表示
 4. **コミット実行** - ユーザーが承認した場合に変更をコミット
 
-#### コードレビュー機能
-1. **変更検出** - ステージング済み（`git diff --staged`）または未ステージ（`git diff`）変更を取得
-2. **AI分析** - diffをVertex AI (Gemini) に送信してリアルタイムストリーミング分析
-3. **フィードバック表示** - セキュリティ、パフォーマンス、保守性の観点から包括的なレビュー結果を表示
+#### PR作成機能
+1. **差分取得** - ベースブランチとHEAD間のコミット/差分を取得
+2. **AI生成** - Vertex AI (Gemini) に送信してPRタイトル/本文を生成
+3. **確認・作成** - 生成結果を確認しPRを作成（またはdry-runで表示）
 
 ### プロジェクト構造
 ```
 cmd/
 ├── root.go          # ルートコマンド定義
 ├── commit.go        # commitコマンド実装
-└── review.go        # reviewコマンド実装
+└── pr.go            # prコマンド実装
 internal/
   ├── git/
   │   └── diff.go      # Git操作 (staged/unstaged diff取得)
   ├── ai/
-  │   └── vertex.go    # コミットメッセージ生成・コードレビューのためのVertex AI統合
+  │   └── vertex.go    # コミットメッセージ生成・PR生成のためのVertex AI統合
   ├── ui/
-  │   └── tui.go       # Bubble Tea TUI実装（コミット・レビュー両対応）
+  │   └── tui.go       # Bubble Tea TUI実装（コミット）
   └── config/
       └── config.go    # 設定管理 (APIキーなど)
 main.go               # アプリケーションエントリーポイント
@@ -47,23 +47,17 @@ main.go               # アプリケーションエントリーポイント
 3. **確認** - 生成されたメッセージを[y/n/e]プロンプトと共に表示（編集機能付き）
 4. **結果** - コミット成功/失敗を表示
 
-#### レビューワークフロー
-1. **起動** - 変更の確認（staged/unstagedを選択可能）
-2. **ストリーミング分析** - リアルタイムでVertex AI分析結果を表示
-3. **結果表示** - マークダウン形式での包括的レビューフィードバック
-
 ### 技術仕様
 - **コミット対象**: ステージング済み変更のみ (`git diff --staged`)
-- **レビュー対象**: ステージング済み (`git diff --staged`) または未ステージ (`git diff`) 変更
+- **PR対象**: ベースブランチとHEAD間のコミット/差分
 - **AIプロバイダー**: Vertex AI (Geminiモデル)
 - **デフォルトFlashモデル**: gemini-2.5-flash
 - **デフォルトProモデル**: gemini-2.5-pro
 - **モデル設定**: 設定ファイル（gelf.yml）で変更可能
 - **入力**: 生のgit diff出力 (フィルタリングなし)
 - **UIフレームワーク**: Bubble Tea (TUI用)
-- **ストリーミング**: リアルタイムAI応答表示（レビュー機能）
-- **マークダウン表示**: glamourライブラリによる整形表示
-- **ユーザーインタラクション**: コミット承認・編集、レビュー結果閲覧
+- **マークダウン表示**: glamourライブラリによる整形表示（PR本文）
+- **ユーザーインタラクション**: コミット承認・編集、PR作成確認
 
 ## コマンド使用法
 
@@ -74,16 +68,14 @@ gelf commit --dry-run          # コミットメッセージ生成のみ（diff�
 gelf commit --dry-run --quiet  # メッセージ生成のみ（外部ツール連携用）
 gelf commit --model MODEL      # 一時的にモデルを変更
 
-# レビュー関連
-gelf review                    # 未ステージ変更をレビュー（デフォルト）
-gelf review --staged           # ステージング済み変更をレビュー
-gelf review --model MODEL      # 一時的にモデルを変更
-gelf review --no-style         # マークダウンスタイリングを無効化
+# PR関連
+gelf pr create                 # PRタイトル/本文を生成して作成
+gelf pr create --dry-run       # PRタイトル/本文の生成のみ表示
 
 # ヘルプ
 gelf --help          # ヘルプ表示
 gelf commit --help   # コミットコマンドのヘルプ
-gelf review --help   # レビューコマンドのヘルプ
+gelf pr --help       # PRコマンドのヘルプ
 ```
 
 ## 開発コマンド
@@ -95,8 +87,7 @@ go test ./...             # テスト実行
 go mod tidy               # 依存関係整理
 go run main.go commit        # アプリケーション実行 (commitコマンド)
 go run main.go commit --dry-run  # メッセージ生成のみのテスト
-go run main.go review        # レビューコマンド実行
-go run main.go review --staged   # ステージング済み変更のレビュー
+go run main.go pr create     # PR作成コマンド実行
 ```
 
 ## 依存関係
@@ -105,7 +96,7 @@ go run main.go review --staged   # ステージング済み変更のレビュー
 - `github.com/charmbracelet/bubbletea` - TUIフレームワーク
 - `github.com/charmbracelet/lipgloss` - スタイリングとレイアウト
 - `github.com/charmbracelet/bubbles` - TUI components (spinner)
-- `github.com/charmbracelet/glamour` - マークダウンレンダリング（レビュー表示用）
+- `github.com/charmbracelet/glamour` - マークダウンレンダリング（PR本文表示用）
 - `google.golang.org/genai` - Vertex AIクライアント
 - `github.com/spf13/cobra` - CLIフレームワーク (サブコマンド実装用)
 - `gopkg.in/yaml.v3` - YAML設定ファイルサポート

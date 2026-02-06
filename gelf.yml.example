@@ -33,14 +33,6 @@ commit:
   # Language for commit messages (optional, inherits from global language if not set)
   language: "english"
 
-# Review-specific settings
-review:
-  # Model to use for code reviews: "flash", "pro", or custom model name (default: pro)
-  model: "pro"
-  
-  # Language for code reviews (optional, inherits from global language if not set)
-  language: "english"
-
 # PR-specific settings
 pr:
   # Model to use for pull requests: "flash", "pro", or custom model name (default: pro)
