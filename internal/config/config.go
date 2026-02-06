@@ -64,18 +64,18 @@ func Load() (*Config, error) {
 		location = fileConfig.VertexAI.Location
 	}
 	if location == "" {
-		location = "us-central1"
+		location = "global"
 	}
 
 	// Define model names
 	flashModel := fileConfig.Model.Flash
 	if flashModel == "" {
-		flashModel = "gemini-2.5-flash"
+		flashModel = "gemini-3-flash-preview"
 	}
 
 	proModel := fileConfig.Model.Pro
 	if proModel == "" {
-		proModel = "gemini-2.5-pro"
+		proModel = "gemini-3-pro-preview"
 	}
 
 	// Default language

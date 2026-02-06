@@ -51,8 +51,8 @@ main.go               # アプリケーションエントリーポイント
 - **コミット対象**: ステージング済み変更のみ (`git diff --staged`)
 - **PR対象**: ベースブランチとHEAD間のコミット/差分
 - **AIプロバイダー**: Vertex AI (Geminiモデル)
-- **デフォルトFlashモデル**: gemini-2.5-flash
-- **デフォルトProモデル**: gemini-2.5-pro
+- **デフォルトFlashモデル**: gemini-3-flash-preview
+- **デフォルトProモデル**: gemini-3-pro-preview
 - **モデル設定**: 設定ファイル（gelf.yml）で変更可能
 - **入力**: 生のgit diff出力 (フィルタリングなし)
 - **UIフレームワーク**: Bubble Tea (TUI用)
@@ -106,7 +106,7 @@ go run main.go pr create     # PR作成コマンド実行
 アプリケーションには以下のVertex AI設定が必要です：
 - Google Cloud プロジェクトID
 - Vertex AI API認証情報
-- モデル選択 (デフォルト: gemini-2.5-flash)
+- モデル選択 (デフォルト: gemini-3-flash-preview)
 
 ### 設定ファイル
 
@@ -120,11 +120,11 @@ go run main.go pr create     # PR作成コマンド実行
 ```yaml
 vertex_ai:
   project_id: "your-gcp-project-id"
-  location: "us-central1"
+  location: "global"
 
 model:
-  flash: "gemini-2.5-flash"  # 高速処理用モデル
-  pro: "gemini-2.5-pro"       # 高品質処理用モデル
+  flash: "gemini-3-flash-preview"  # 高速処理用モデル
+  pro: "gemini-3-pro-preview"       # 高品質処理用モデル
 ```
 
 設定の優先順位（高い順）：
@@ -142,7 +142,7 @@ devcontainerの設定：
 - `GELF_CREDENTIALS` - サービスアカウントキーへのパス（GOOGLE_APPLICATION_CREDENTIALSより優先）
 - `GOOGLE_APPLICATION_CREDENTIALS` - サービスアカウントキーへのパス
 - `VERTEXAI_PROJECT` - Google CloudプロジェクトID
-- `VERTEXAI_LOCATION` - Vertex AIのロケーション (デフォルト: us-central1)
+- `VERTEXAI_LOCATION` - Vertex AIのロケーション (デフォルト: global)
 
 モデル設定は設定ファイル（gelf.yml）でのみ変更可能です。
 

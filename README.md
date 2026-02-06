@@ -59,11 +59,11 @@ Create a `gelf.yml` file in one of the following locations (in order of priority
 ```yaml
 vertex_ai:
   project_id: "your-gcp-project-id"
-  location: "us-central1"  # optional, default: us-central1
+  location: "global"  # optional, default: global
 
 model:
-  flash: gemini-2.5-flash
-  pro: gemini-2.5-pro
+  flash: gemini-3-flash-preview
+  pro: gemini-3-pro-preview
 
 language: "english"  # optional, default: english
 
@@ -92,8 +92,8 @@ export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/service-account-key.json"
 # Google Cloud project ID
 export VERTEXAI_PROJECT="your-project-id"
 
-# Vertex AI location (optional, default: us-central1)
-export VERTEXAI_LOCATION="us-central1"
+# Vertex AI location (optional, default: global)
+export VERTEXAI_LOCATION="global"
 ```
 
 **Note**: Model configuration and language settings can only be configured via configuration file, not environment variables.
@@ -250,8 +250,8 @@ This allows you to set a global default language, override it for specific comma
 - **Commit Target**: Staged changes only (`git diff --staged`)
 - **PR Target**: Committed changes between base branch and `HEAD`
 - **AI Provider**: Vertex AI (Gemini models)
-- **Default Flash Model**: gemini-2.5-flash
-- **Default Pro Model**: gemini-2.5-pro
+- **Default Flash Model**: gemini-3-flash-preview
+- **Default Pro Model**: gemini-3-pro-preview
 - **UI Framework**: Bubble Tea (TUI)
 - **CLI Framework**: Cobra
 
@@ -303,11 +303,11 @@ Settings are applied in the following order (highest to lowest priority):
 ```yaml
 vertex_ai:
   project_id: string     # Google Cloud project ID
-  location: string       # Vertex AI location (default: us-central1)
+  location: string       # Vertex AI location (default: global)
 
 model:
-  flash: string          # Gemini Flash model to use (default: gemini-2.5-flash)
-  pro: string            # Gemini Pro model to use (default: gemini-2.5-pro)
+  flash: string          # Gemini Flash model to use (default: gemini-3-flash-preview)
+  pro: string            # Gemini Pro model to use (default: gemini-3-pro-preview)
 
 language: string         # Global default language (default: english)
 
@@ -329,7 +329,7 @@ color: string            # Color output setting: "always" or "never" (default: a
 | `GELF_CREDENTIALS` | Path to service account key file (gelf-specific, takes priority) | - | ⚠️* |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account key file (ADC fallback) | - | ⚠️* |
 | `VERTEXAI_PROJECT` or `GOOGLE_CLOUD_PROJECT` | Google Cloud project ID | - | ✅ |
-| `VERTEXAI_LOCATION` | Vertex AI location | `us-central1` | ❌ |
+| `VERTEXAI_LOCATION` | Vertex AI location | `global` | ❌ |
 
 *Either `GELF_CREDENTIALS` or `GOOGLE_APPLICATION_CREDENTIALS` is required unless ADC is already available (e.g., `gcloud auth application-default login`, Workload Identity, or GCE/GKE metadata). If both are set, `GELF_CREDENTIALS` takes priority.
 
