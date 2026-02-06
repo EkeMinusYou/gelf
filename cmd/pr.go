@@ -389,6 +389,7 @@ func ensureBranchPushed(cmd *cobra.Command, branch string, prContext string) (bo
 
 	if strings.TrimSpace(prContext) != "" {
 		fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", prContext)
+		fmt.Fprintln(cmd.ErrOrStderr())
 	}
 
 	prompt := fmt.Sprintf("Current branch is not pushed to %s. Push now? (y)es / (n)o", remoteName)
