@@ -172,6 +172,16 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to determine base branch: %w", err)
 	}
 
+	if !prDryRun {
+		shouldContinue, err := ensureBranchPushed(cmd, headBranch)
+		if err != nil {
+			return err
+		}
+		if !shouldContinue {
+			return nil
+		}
+	}
+
 	baseRef := "origin/" + baseBranch
 	commitLog, err := git.GetCommitLog(baseRef, "HEAD")
 	if err != nil {
@@ -192,18 +202,6 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	}
 	if diff == "" {
 		return fmt.Errorf("no committed changes found between %s and %s", baseRef, headBranch)
-	}
-
-	if !prDryRun {
-		prContext := ui.FormatPRContext(diff, commitLog)
-		var shouldContinue bool
-		shouldContinue, err = ensureBranchPushed(cmd, headBranch, prContext)
-		if err != nil {
-			return err
-		}
-		if !shouldContinue {
-			return nil
-		}
 	}
 
 	aiClient, err := ai.NewVertexAIClient(ctx, cfg)
@@ -373,7 +371,7 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func ensureBranchPushed(cmd *cobra.Command, branch string, prContext string) (bool, error) {
+func ensureBranchPushed(cmd *cobra.Command, branch string) (bool, error) {
 	status, err := git.GetPushStatus(branch)
 	if err != nil {
 		return false, fmt.Errorf("failed to check if branch is pushed: %w", err)
@@ -385,11 +383,6 @@ func ensureBranchPushed(cmd *cobra.Command, branch string, prContext string) (bo
 	remoteName := status.RemoteName
 	if remoteName == "" {
 		remoteName = "origin"
-	}
-
-	if strings.TrimSpace(prContext) != "" {
-		fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", prContext)
-		fmt.Fprintln(cmd.ErrOrStderr())
 	}
 
 	prompt := fmt.Sprintf("Current branch is not pushed to %s. Push now? (y)es / (n)o", remoteName)
