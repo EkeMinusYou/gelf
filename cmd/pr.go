@@ -414,7 +414,7 @@ func ensureBranchPushed(cmd *cobra.Command, branch string) (bool, error) {
 	}
 	stopSpinner()
 
-	fmt.Fprintf(cmd.OutOrStdout(), "%s\n\n", ui.RenderSuccessHeader("✓ Push succeeded"))
+	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessHeader("✓ Push succeeded"))
 
 	return true, nil
 }

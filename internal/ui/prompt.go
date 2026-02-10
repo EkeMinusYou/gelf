@@ -33,7 +33,6 @@ func PromptYesNoWithWriter(prompt string, out io.Writer) (bool, error) {
 		if _, err := p.Run(); err != nil {
 			return false, err
 		}
-		fmt.Fprintln(out)
 		return m.confirmed, nil
 	}
 
