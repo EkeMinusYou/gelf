@@ -41,6 +41,12 @@ brew tap ekeminusyou/gelf
 brew install ekeminusyou/gelf/gelf
 ```
 
+If macOS blocks execution due to the quarantine attribute, remove it with:
+
+```bash
+sudo xattr -d com.apple.quarantine "$(which gelf)"
+```
+
 ## ⚙️ Setup
 
 ### 1. Configuration Options
