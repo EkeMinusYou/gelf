@@ -74,6 +74,8 @@ commit:
 pr:
   model: "pro"       # optional, default: pro
   language: "english"  # optional, inherits from global language
+  title_language: "english"  # optional, inherits from pr.language
+  body_language: "english"   # optional, inherits from pr.language
 
 color: "always"  # optional, default: always
 ```
@@ -142,7 +144,9 @@ Options:
 - `--render` to render markdown in dry-run output (default: true)
 - `--no-render` to disable markdown rendering in dry-run output
 - `--model` to override the model for PR generation
-- `--language` to set the output language
+- `--language` to set the output language for both title and body
+- `--title-language` to set the language for PR title only
+- `--body-language` to set the language for PR body only
 - `--yes` to skip confirmation prompt
 
 ### Command Options
@@ -187,6 +191,9 @@ gelf pr create --dry-run --no-render
 # Use specific model and language for PR generation
 gelf pr create --model gemini-2.0-flash-exp --language japanese
 
+# Use different languages for title and body
+gelf pr create --title-language english --body-language japanese
+
 # Skip confirmation prompt
 gelf pr create --yes
 
@@ -219,6 +226,9 @@ gelf pr create --language french
 # Use different languages for different operations
 gelf commit --language english
 gelf pr create --language japanese
+
+# Use different languages for PR title and body
+gelf pr create --title-language english --body-language japanese
 ```
 
 #### 2. Configuration File
@@ -230,18 +240,23 @@ commit:
 
 pr:
   language: "english"   # Language for pull request titles and descriptions
+  title_language: "english"  # Override language for PR title only
+  body_language: "japanese"  # Override language for PR body only
 ```
 
 #### 3. Defaults
 If no language is specified, commit messages and PR content will use English.
 
 ### Priority Order
-1. Command-line `--language` flag (highest priority)
-2. Configuration file command-specific settings (`commit.language`/`pr.language`)
+1. Command-line flags (highest priority)
+   - `--language` sets both title and body language
+   - `--title-language` overrides title language specifically
+   - `--body-language` overrides body language specifically
+2. Configuration file command-specific settings (`commit.language`/`pr.language`/`pr.title_language`/`pr.body_language`)
 3. Configuration file global setting (`language`)
 4. Default value (`english`)
 
-This allows you to set a global default language, override it for specific commands, and still override everything on a per-command basis.
+This allows you to set a global default language, override it for specific commands, and even use different languages for PR titles and bodies.
 
 ## 🔧 Technical Specifications
 
@@ -318,6 +333,8 @@ commit:
 pr:
   model: string          # Model for pull requests: "flash", "pro", or custom (default: pro)
   language: string       # Language for pull request titles and descriptions (inherits from global if not set)
+  title_language: string # Language for PR title only (inherits from pr.language if not set)
+  body_language: string  # Language for PR body only (inherits from pr.language if not set)
 
 color: string            # Color output setting: "always" or "never" (default: always)
 ```
