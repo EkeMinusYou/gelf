@@ -52,7 +52,7 @@ main.go               # アプリケーションエントリーポイント
 - **PR対象**: ベースブランチとHEAD間のコミット/差分
 - **AIプロバイダー**: Vertex AI (Geminiモデル)
 - **デフォルトFlashモデル**: gemini-3-flash-preview
-- **デフォルトProモデル**: gemini-3-pro-preview
+- **デフォルトProモデル**: gemini-3.1-pro-preview
 - **モデル設定**: 設定ファイル（gelf.yml）で変更可能
 - **入力**: 生のgit diff出力 (フィルタリングなし)
 - **UIフレームワーク**: Bubble Tea (TUI用)
@@ -124,7 +124,7 @@ vertex_ai:
 
 model:
   flash: "gemini-3-flash-preview"  # 高速処理用モデル
-  pro: "gemini-3-pro-preview"       # 高品質処理用モデル
+  pro: "gemini-3.1-pro-preview"     # 高品質処理用モデル
 ```
 
 設定の優先順位（高い順）：

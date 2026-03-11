@@ -63,7 +63,7 @@ vertex_ai:
 
 model:
   flash: gemini-3-flash-preview
-  pro: gemini-3-pro-preview
+  pro: gemini-3.1-pro-preview
 
 language: "english"  # optional, default: english
 
@@ -266,7 +266,7 @@ This allows you to set a global default language, override it for specific comma
 - **PR Target**: Committed changes between base branch and `HEAD`
 - **AI Provider**: Vertex AI (Gemini models)
 - **Default Flash Model**: gemini-3-flash-preview
-- **Default Pro Model**: gemini-3-pro-preview
+- **Default Pro Model**: gemini-3.1-pro-preview
 - **UI Framework**: Bubble Tea (TUI)
 - **CLI Framework**: Cobra
 
@@ -322,7 +322,7 @@ vertex_ai:
 
 model:
   flash: string          # Gemini Flash model to use (default: gemini-3-flash-preview)
-  pro: string            # Gemini Pro model to use (default: gemini-3-pro-preview)
+  pro: string            # Gemini Pro model to use (default: gemini-3.1-pro-preview)
 
 language: string         # Global default language (default: english)
 

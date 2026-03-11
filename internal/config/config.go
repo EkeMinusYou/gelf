@@ -79,7 +79,7 @@ func Load() (*Config, error) {
 
 	proModel := fileConfig.Model.Pro
 	if proModel == "" {
-		proModel = "gemini-3-pro-preview"
+		proModel = "gemini-3.1-pro-preview"
 	}
 
 	// Default language
