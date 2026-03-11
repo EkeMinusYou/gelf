@@ -39,7 +39,14 @@ pr:
   model: "pro"
 
   # Language for pull request titles and descriptions (optional, inherits from global language if not set)
+  # You can specify separate languages for title and body
   language: "english"
+
+  # Optional: Override language for PR title only (inherits from pr.language if not set)
+  # title_language: "english"
+
+  # Optional: Override language for PR body only (inherits from pr.language if not set)
+  # body_language: "japanese"
 
 # Configuration priority (highest to lowest):
 # 1. Environment variables (VERTEXAI_PROJECT, VERTEXAI_LOCATION)

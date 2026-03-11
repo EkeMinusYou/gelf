@@ -31,14 +31,16 @@ var prCreateCmd = &cobra.Command{
 }
 
 var (
-	prDraft    bool
-	prDryRun   bool
-	prModel    string
-	prLanguage string
-	prRender   bool
-	prNoRender bool
-	prYes      bool
-	prUpdate   bool
+	prDraft         bool
+	prDryRun        bool
+	prModel         string
+	prLanguage      string
+	prTitleLanguage string
+	prBodyLanguage  string
+	prRender        bool
+	prNoRender      bool
+	prYes           bool
+	prUpdate        bool
 )
 
 func init() {
@@ -46,6 +48,8 @@ func init() {
 	prCreateCmd.Flags().BoolVar(&prDryRun, "dry-run", false, "Print the generated title and body without creating a pull request")
 	prCreateCmd.Flags().StringVar(&prModel, "model", "", "Override default model for PR generation")
 	prCreateCmd.Flags().StringVar(&prLanguage, "language", "", "Language for PR generation (e.g., english, japanese)")
+	prCreateCmd.Flags().StringVar(&prTitleLanguage, "title-language", "", "Language for PR title (e.g., english, japanese)")
+	prCreateCmd.Flags().StringVar(&prBodyLanguage, "body-language", "", "Language for PR body (e.g., english, japanese)")
 	prCreateCmd.Flags().BoolVar(&prRender, "render", true, "Render pull request markdown body")
 	prCreateCmd.Flags().BoolVar(&prNoRender, "no-render", false, "Disable markdown rendering in dry-run output")
 	prCreateCmd.Flags().BoolVar(&prYes, "yes", false, "Automatically approve PR creation without confirmation")
@@ -62,8 +66,17 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
+	// Override language settings from command line flags
 	if prLanguage != "" {
 		cfg.PRLanguage = prLanguage
+		cfg.PRTitleLanguage = prLanguage
+		cfg.PRBodyLanguage = prLanguage
+	}
+	if prTitleLanguage != "" {
+		cfg.PRTitleLanguage = prTitleLanguage
+	}
+	if prBodyLanguage != "" {
+		cfg.PRBodyLanguage = prBodyLanguage
 	}
 
 	if prNoRender {
@@ -220,13 +233,15 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 
 	if prDryRun {
 		prContent, err := aiClient.GeneratePullRequestContent(ctx, ai.PullRequestInput{
-			BaseBranch: baseBranch,
-			HeadBranch: headBranch,
-			CommitLog:  commitLog,
-			DiffStat:   diffStat,
-			Diff:       diff,
-			Template:   templateContent,
-			Language:   cfg.PRLanguage,
+			BaseBranch:    baseBranch,
+			HeadBranch:    headBranch,
+			CommitLog:     commitLog,
+			DiffStat:      diffStat,
+			Diff:          diff,
+			Template:      templateContent,
+			Language:      cfg.PRLanguage,
+			TitleLanguage: cfg.PRTitleLanguage,
+			BodyLanguage:  cfg.PRBodyLanguage,
 		})
 		if err != nil {
 			return err
@@ -254,13 +269,15 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	var prContent *ai.PullRequestContent
 	if prYes {
 		prContent, err = aiClient.GeneratePullRequestContent(ctx, ai.PullRequestInput{
-			BaseBranch: baseBranch,
-			HeadBranch: headBranch,
-			CommitLog:  commitLog,
-			DiffStat:   diffStat,
-			Diff:       diff,
-			Template:   templateContent,
-			Language:   cfg.PRLanguage,
+			BaseBranch:    baseBranch,
+			HeadBranch:    headBranch,
+			CommitLog:     commitLog,
+			DiffStat:      diffStat,
+			Diff:          diff,
+			Template:      templateContent,
+			Language:      cfg.PRLanguage,
+			TitleLanguage: cfg.PRTitleLanguage,
+			BodyLanguage:  cfg.PRBodyLanguage,
 		})
 		if err != nil {
 			return err
@@ -271,13 +288,15 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 			confirmPrompt = "Update this pull request? (y)es / (n)o"
 		}
 		prTUI := ui.NewPRTUI(aiClient, ai.PullRequestInput{
-			BaseBranch: baseBranch,
-			HeadBranch: headBranch,
-			CommitLog:  commitLog,
-			DiffStat:   diffStat,
-			Diff:       diff,
-			Template:   templateContent,
-			Language:   cfg.PRLanguage,
+			BaseBranch:    baseBranch,
+			HeadBranch:    headBranch,
+			CommitLog:     commitLog,
+			DiffStat:      diffStat,
+			Diff:          diff,
+			Template:      templateContent,
+			Language:      cfg.PRLanguage,
+			TitleLanguage: cfg.PRTitleLanguage,
+			BodyLanguage:  cfg.PRBodyLanguage,
 		}, prRender, cfg.UseColor(), confirmPrompt)
 
 		content, confirmed, err := prTUI.Run()

@@ -5,7 +5,7 @@ go 1.24.3
 require (
 	github.com/charmbracelet/bubbles v0.21.1
 	github.com/charmbracelet/bubbletea v1.3.10
-	github.com/charmbracelet/glamour v0.10.0
+	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20260202080749-832bc9d6b9d2
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/term v0.39.0

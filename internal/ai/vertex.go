@@ -8,18 +8,19 @@ import (
 	"strings"
 
 	"github.com/EkeMinusYou/gelf/internal/config"
-
 	"google.golang.org/genai"
 )
 
 type PullRequestInput struct {
-	BaseBranch string
-	HeadBranch string
-	CommitLog  string
-	DiffStat   string
-	Diff       string
-	Template   string
-	Language   string
+	BaseBranch    string
+	HeadBranch    string
+	CommitLog     string
+	DiffStat      string
+	Diff          string
+	Template      string
+	Language      string
+	TitleLanguage string
+	BodyLanguage  string
 }
 
 type PullRequestContent struct {
@@ -138,6 +139,16 @@ func (v *VertexAIClient) GeneratePullRequestContent(ctx context.Context, input P
 		template = "NONE"
 	}
 
+	// Use TitleLanguage and BodyLanguage if specified, otherwise fall back to Language
+	titleLanguage := input.TitleLanguage
+	if titleLanguage == "" {
+		titleLanguage = input.Language
+	}
+	bodyLanguage := input.BodyLanguage
+	if bodyLanguage == "" {
+		bodyLanguage = input.Language
+	}
+
 	prompt := fmt.Sprintf(`You are an expert software engineer writing a GitHub pull request title and description.
 
 OUTPUT FORMAT:
@@ -146,7 +157,8 @@ OUTPUT FORMAT:
 - JSON schema: {"title":"...", "body":"..."}
 
 LANGUAGE:
-- Write in %s.
+- Write the title in %s.
+- Write the body in %s.
 
 TITLE REQUIREMENTS:
 - Concise and specific.
@@ -175,7 +187,7 @@ DIFF:
 
 PR_TEMPLATE:
 %s
-`, input.Language, input.BaseBranch, input.HeadBranch, input.CommitLog, input.DiffStat, input.Diff, template)
+`, titleLanguage, bodyLanguage, input.BaseBranch, input.HeadBranch, input.CommitLog, input.DiffStat, input.Diff, template)
 
 	resp, err := v.client.Models.GenerateContent(ctx, v.flashModel,
 		[]*genai.Content{
