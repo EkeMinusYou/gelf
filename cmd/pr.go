@@ -185,6 +185,12 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to determine base branch: %w", err)
 	}
 
+	// When updating, use the existing PR's base branch to avoid including
+	// unrelated commits from a non-default base branch in the diff.
+	if updateExisting && existingPR.Base != "" {
+		baseBranch = existingPR.Base
+	}
+
 	if !prDryRun {
 		shouldContinue, err := ensureBranchPushed(cmd, headBranch)
 		if err != nil {

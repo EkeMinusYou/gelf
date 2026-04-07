@@ -20,6 +20,7 @@ type PullRequestInfo struct {
 	URL     string `json:"url"`
 	State   string `json:"state"`
 	IsDraft bool   `json:"isDraft"`
+	Base    string `json:"base"`
 }
 
 type pullRequestListItem struct {
@@ -30,6 +31,7 @@ type pullRequestListItem struct {
 	IsDraft bool   `json:"isDraft"`
 
 	HeadRefName         string `json:"headRefName"`
+	BaseRefName         string `json:"baseRefName"`
 	HeadRepositoryOwner struct {
 		Login string `json:"login"`
 	} `json:"headRepositoryOwner"`
@@ -114,7 +116,7 @@ func FindPullRequest(ctx context.Context, repoFullName, headBranch string, headO
 	owners := normalizeOwners(headOwners)
 
 	listByHead := func(head string, limit int) ([]pullRequestListItem, error) {
-		args := []string{"pr", "list", "--state", "all", "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner", "--limit", fmt.Sprintf("%d", limit), "--head", head}
+		args := []string{"pr", "list", "--state", "all", "--json", "number,title,url,state,isDraft,headRefName,baseRefName,headRepositoryOwner", "--limit", fmt.Sprintf("%d", limit), "--head", head}
 		if strings.TrimSpace(repoFullName) != "" {
 			args = append(args, "--repo", repoFullName)
 		}
@@ -153,6 +155,7 @@ func FindPullRequest(ctx context.Context, repoFullName, headBranch string, headO
 				URL:     pr.URL,
 				State:   pr.State,
 				IsDraft: pr.IsDraft,
+				Base:    pr.BaseRefName,
 			}
 		}
 		return nil
