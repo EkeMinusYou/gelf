@@ -1,6 +1,6 @@
 package ui
 
-import "github.com/charmbracelet/glamour"
+import "charm.land/glamour/v2"
 
 func RenderMarkdown(markdown string, useColor bool) (string, error) {
 	opts := []glamour.TermRendererOption{
@@ -8,7 +8,7 @@ func RenderMarkdown(markdown string, useColor bool) (string, error) {
 	}
 
 	if useColor {
-		opts = append(opts, glamour.WithAutoStyle())
+		opts = append(opts, glamour.WithEnvironmentConfig())
 	} else {
 		opts = append(opts, glamour.WithStandardStyle("ascii"))
 	}
