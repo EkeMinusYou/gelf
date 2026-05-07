@@ -6,6 +6,7 @@ gelf is a Go-based CLI tool that generates Git commit messages and AI-assisted p
 
 - 🤖 **AI-Powered**: Intelligent commit message generation using Vertex AI (Gemini)
 - 📝 **PR Creation**: Generate pull request titles and descriptions with AI
+- 💬 **Interactive Revisions**: Refine generated PR titles and bodies with chat-style instructions
 - 🎨 **Clean TUI**: Simple and intuitive user interface built with Bubble Tea  
 - ⚡ **Fast Processing**: Real-time progress indicators during generation
 - 🛡️ **Safe Operations**: Commit generation uses staged changes for a secure workflow
@@ -144,6 +145,12 @@ Generate pull requests with AI-generated titles and descriptions based on commit
 gelf pr create
 ```
 
+After the PR title and description are generated, the interactive prompt lets you:
+
+- Press `y` to create the pull request with the generated content
+- Press `r` to enter chat-style revision instructions (e.g. "shorten the title", "add a Testing section in Japanese"). gelf re-generates the title/body using your feedback and asks again — repeat as many times as you like.
+- Press `n` (or `Esc` / `q`) to cancel without creating a PR
+
 Options:
 - `--draft` to create a draft PR
 - `--dry-run` to print the generated title/body without creating a PR
@@ -153,7 +160,7 @@ Options:
 - `--language` to set the output language for both title and body
 - `--title-language` to set the language for PR title only
 - `--body-language` to set the language for PR body only
-- `--yes` to skip confirmation prompt
+- `--yes` to skip confirmation prompt (also skips the revise step)
 
 ### Command Options
 
@@ -300,12 +307,18 @@ main.go             # Application entry point
 
 ## 🎨 User Interface
 
-The application provides a clean, interactive terminal interface for commit generation:
+The application provides a clean, interactive terminal interface for commit and PR generation:
 
 ### Commit Workflow
 - Loading indicator while generating commit messages
 - Review screen for generated commit messages with approval options
 - Success confirmation after successful commits
+
+### Pull Request Workflow
+- Loading indicator while generating PR title and description
+- Review screen showing the generated title and (optionally rendered) body
+- Choose between creating, revising via chat instructions, or cancelling
+- When revising, type your feedback (e.g. "make it more concise") and gelf regenerates the title/body — loop until you are satisfied
 
 The interface features color-coded states, animated progress indicators, and intuitive keyboard controls for a smooth user experience.
 

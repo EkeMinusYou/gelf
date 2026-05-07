@@ -36,7 +36,7 @@ func NewPRTUI(aiClient *ai.VertexAIClient, input ai.PullRequestInput, render boo
 		useColor:    useColor,
 		confirmPrompt: func() string {
 			if strings.TrimSpace(confirmPrompt) == "" {
-				return "Create this pull request? (y)es / (n)o"
+				return "Create this pull request? (y)es / (r)evise / (n)o"
 			}
 			return confirmPrompt
 		}(),
@@ -54,19 +54,62 @@ func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
 	}
 
 	m.content = content
-
-	if m.render {
-		rendered, err := RenderMarkdown(content.Body, m.useColor)
-		if err == nil {
-			m.renderedBody = strings.TrimRight(rendered, "\n")
-		}
-	}
+	m.refreshRenderedBody()
 
 	fmt.Printf("%s\n", m.buildPRContent())
 	fmt.Println()
 
-	confirmed, err := PromptYesNoStyled(m.confirmPrompt)
-	return content, confirmed, err
+	for {
+		choice, err := PromptPRChoiceStyled(m.confirmPrompt)
+		if err != nil {
+			return nil, false, err
+		}
+
+		switch choice {
+		case PRChoiceYes:
+			return m.content, true, nil
+		case PRChoiceNo:
+			return m.content, false, nil
+		case PRChoiceRevise:
+			instructions, ok, err := PromptLineStyled(
+				"💬 Tell me how to revise the pull request:",
+				"e.g. shorten the title and add a Testing section",
+			)
+			if err != nil {
+				return nil, false, err
+			}
+			if !ok || instructions == "" {
+				continue
+			}
+
+			revisionStop := m.startRevisionIndicator()
+			revised, err := m.aiClient.RevisePullRequestContent(ctx, m.input, m.content, instructions)
+			revisionStop()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%s\n\n", errorStyle.Render(fmt.Sprintf("✗ Failed to revise pull request: %v", err)))
+				continue
+			}
+
+			m.content = revised
+			m.refreshRenderedBody()
+			m.printedContext = true
+
+			fmt.Println()
+			fmt.Printf("%s\n", m.buildPRContent())
+			fmt.Println()
+		}
+	}
+}
+
+func (m *prModel) refreshRenderedBody() {
+	m.renderedBody = ""
+	if !m.render || m.content == nil {
+		return
+	}
+	rendered, err := RenderMarkdown(m.content.Body, m.useColor)
+	if err == nil {
+		m.renderedBody = strings.TrimRight(rendered, "\n")
+	}
 }
 
 func (m *prModel) startLoadingIndicator(context string) func() {
@@ -81,6 +124,13 @@ func (m *prModel) startLoadingIndicator(context string) func() {
 	}
 
 	return StartSpinner("Generating pull request message...", os.Stderr)
+}
+
+func (m *prModel) startRevisionIndicator() func() {
+	if !isTerminalWriter(os.Stderr) {
+		return func() {}
+	}
+	return StartSpinner("Revising pull request based on your feedback...", os.Stderr)
 }
 
 func (m *prModel) buildPRContent() string {
