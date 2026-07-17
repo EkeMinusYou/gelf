@@ -289,9 +289,9 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	} else {
-		confirmPrompt := "Create this pull request? (y)es / (n)o"
+		confirmPrompt := "Create this pull request? (y)es / (r)evise / (n)o"
 		if updateExisting {
-			confirmPrompt = "Update this pull request? (y)es / (n)o"
+			confirmPrompt = "Update this pull request? (y)es / (r)evise / (n)o"
 		}
 		prTUI := ui.NewPRTUI(aiClient, ai.PullRequestInput{
 			BaseBranch:    baseBranch,

@@ -237,6 +237,120 @@ PR_TEMPLATE:
 	return &result, nil
 }
 
+func (v *VertexAIClient) RevisePullRequestContent(ctx context.Context, input PullRequestInput, previous *PullRequestContent, instructions string) (*PullRequestContent, error) {
+	if previous == nil {
+		return nil, fmt.Errorf("previous content is required for revision")
+	}
+	if strings.TrimSpace(instructions) == "" {
+		return nil, fmt.Errorf("revision instructions are empty")
+	}
+
+	template := input.Template
+	if strings.TrimSpace(template) == "" {
+		template = "NONE"
+	}
+
+	titleLanguage := input.TitleLanguage
+	if titleLanguage == "" {
+		titleLanguage = input.Language
+	}
+	bodyLanguage := input.BodyLanguage
+	if bodyLanguage == "" {
+		bodyLanguage = input.Language
+	}
+
+	prompt := fmt.Sprintf(`You are an expert software engineer revising a GitHub pull request title and description based on user feedback.
+
+OUTPUT FORMAT:
+- Respond with ONLY a valid JSON object.
+- No markdown fences or extra text.
+- JSON schema: {"title":"...", "body":"..."}
+
+LANGUAGE:
+- Write the title in %s.
+- Write the body in %s.
+
+REVISION REQUIREMENTS:
+- Apply the user's revision instructions faithfully.
+- Preserve information and structure that is not affected by the instructions.
+- Keep the title concise (under 72 characters if possible) and in imperative mood.
+- If PR_TEMPLATE is not "NONE", continue to respect its sections, headings, lists, checkboxes, and HTML comments.
+- If PR_TEMPLATE is "NONE", keep using sections such as Summary, Changes, Testing where appropriate.
+- Do not invent information not supported by the commits and diff.
+
+BASE BRANCH: %s
+HEAD BRANCH: %s
+
+COMMITS (oldest to newest):
+%s
+
+DIFF STAT:
+%s
+
+DIFF:
+%s
+
+PR_TEMPLATE:
+%s
+
+CURRENT_TITLE:
+%s
+
+CURRENT_BODY:
+%s
+
+USER_REVISION_INSTRUCTIONS:
+%s
+`, titleLanguage, bodyLanguage, input.BaseBranch, input.HeadBranch, input.CommitLog, input.DiffStat, input.Diff, template, previous.Title, previous.Body, instructions)
+
+	resp, err := v.client.Models.GenerateContent(ctx, v.flashModel,
+		[]*genai.Content{
+			genai.NewContentFromText(prompt, genai.RoleUser),
+		},
+		&genai.GenerateContentConfig{
+			Temperature: genai.Ptr(float32(0.2)),
+		})
+	if err != nil {
+		return nil, fmt.Errorf("failed to revise pull request content: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 {
+		return nil, fmt.Errorf("no candidates in response")
+	}
+
+	if len(resp.Candidates[0].Content.Parts) == 0 {
+		return nil, fmt.Errorf("no content parts in response")
+	}
+
+	part := resp.Candidates[0].Content.Parts[0]
+	if part.Text == "" {
+		return nil, fmt.Errorf("empty text in response part")
+	}
+
+	text := strings.TrimSpace(part.Text)
+	if strings.HasPrefix(text, "```json") {
+		text = strings.TrimPrefix(text, "```json")
+		text = strings.TrimSuffix(text, "```")
+		text = strings.TrimSpace(text)
+	}
+
+	var result PullRequestContent
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON response: %w", err)
+	}
+
+	result.Title = strings.TrimSpace(result.Title)
+	result.Body = strings.TrimSpace(result.Body)
+	if result.Title == "" {
+		return nil, fmt.Errorf("revised PR title is empty")
+	}
+	if result.Body == "" {
+		return nil, fmt.Errorf("revised PR body is empty")
+	}
+
+	return &result, nil
+}
+
 func (v *VertexAIClient) Close() error {
 	return nil
 }
