@@ -330,15 +330,11 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 			}
 			return fmt.Errorf("failed to update pull request: %w", err)
 		}
-		successHeader := "✓ Pull request updated"
+		suffix := ""
 		if existingPR.Number > 0 {
-			successHeader = fmt.Sprintf("✓ Pull request updated (#%d)", existingPR.Number)
+			suffix = fmt.Sprintf("(#%d)", existingPR.Number)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessHeader(successHeader))
-		fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessMessage(prContent.Title))
-		if existingPR.URL != "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", existingPR.URL)
-		}
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderPRSuccess("✓ Pull request updated", prContent.Title, suffix, existingPR.URL))
 		return nil
 	}
 
@@ -382,16 +378,14 @@ func runPRCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	prNumber := pullNumberFromURL(prURL)
-	successHeader := "✓ Pull request created"
+	var suffixParts []string
 	if prNumber != "" {
-		successHeader = fmt.Sprintf("✓ Pull request created (#%s)", prNumber)
+		suffixParts = append(suffixParts, fmt.Sprintf("(#%s)", prNumber))
 	}
 	if prDraft {
-		successHeader = fmt.Sprintf("%s (draft)", successHeader)
+		suffixParts = append(suffixParts, "(draft)")
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessHeader(successHeader))
-	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderSuccessMessage(prContent.Title))
-	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", prURL)
+	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderPRSuccess("✓ Pull request created", prContent.Title, strings.Join(suffixParts, " "), prURL))
 
 	return nil
 }

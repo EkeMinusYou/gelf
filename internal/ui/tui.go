@@ -302,6 +302,13 @@ var (
 
 	deletedStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("1"))
+
+	subtleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8"))
+
+	urlStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("4")).
+			Underline(true)
 )
 
 func DisableColor() {
@@ -317,4 +324,6 @@ func DisableColor() {
 	fileStyle = lipgloss.NewStyle().Bold(true)
 	addedStyle = lipgloss.NewStyle()
 	deletedStyle = lipgloss.NewStyle()
+	subtleStyle = lipgloss.NewStyle()
+	urlStyle = lipgloss.NewStyle()
 }
