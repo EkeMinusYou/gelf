@@ -15,16 +15,18 @@ func RenderSuccessMessage(text string) string {
 	return messageStyle.Render(text)
 }
 
-// RenderPRSuccess renders a pull request success block: the header and title
-// share the first line (styled distinctly), followed by an indented link line
-// when a URL is available.
+// RenderPRSuccess renders a pull request success block: a header line, the PR
+// title on its own line, and a link line when a URL is available. The title is
+// indented so its text lines up with the header and URL text after their
+// single-width leading symbols.
 func RenderPRSuccess(header, title, suffix, url string) string {
-	line := fmt.Sprintf("%s %s", successStyle.Render(header+":"), messageStyle.Render(title))
+	headerLine := successStyle.Render(header)
 	if suffix != "" {
-		line = fmt.Sprintf("%s %s", line, subtleStyle.Render(suffix))
+		headerLine = fmt.Sprintf("%s %s", headerLine, subtleStyle.Render(suffix))
 	}
+	lines := []string{headerLine, "  " + messageStyle.Render(title)}
 	if strings.TrimSpace(url) != "" {
-		line += fmt.Sprintf("\n  🔗 %s", urlStyle.Render(url))
+		lines = append(lines, fmt.Sprintf("↳ %s", urlStyle.Render(url)))
 	}
-	return line
+	return strings.Join(lines, "\n")
 }
