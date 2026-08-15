@@ -33,6 +33,9 @@ commit:
   # Language for commit messages (optional, inherits from global language if not set)
   language: "english"
 
+  # Maximum staged diff size sent to the AI in bytes (default: 100000)
+  max_diff_bytes: 100000
+
 # PR-specific settings
 pr:
   # Model to use for pull requests: "flash", "pro", or custom model name (default: pro)

@@ -7,20 +7,23 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const DefaultCommitMaxDiffBytes = 100_000
+
 type Config struct {
-	ProjectID       string
-	Location        string
-	FlashModel      string
-	ProModel        string
-	BaseFlashModel  string
-	BaseProModel    string
-	CommitLanguage  string
-	CommitModel     string
-	PRLanguage      string
-	PRTitleLanguage string
-	PRBodyLanguage  string
-	PRModel         string
-	Color           string
+	ProjectID          string
+	Location           string
+	FlashModel         string
+	ProModel           string
+	BaseFlashModel     string
+	BaseProModel       string
+	CommitLanguage     string
+	CommitModel        string
+	CommitMaxDiffBytes int
+	PRLanguage         string
+	PRTitleLanguage    string
+	PRBodyLanguage     string
+	PRModel            string
+	Color              string
 }
 
 type FileConfig struct {
@@ -35,8 +38,9 @@ type FileConfig struct {
 	Language string `yaml:"language"`
 	Color    string `yaml:"color"`
 	Commit   struct {
-		Model    string `yaml:"model"`
-		Language string `yaml:"language"`
+		Model        string `yaml:"model"`
+		Language     string `yaml:"language"`
+		MaxDiffBytes int    `yaml:"max_diff_bytes"`
 	} `yaml:"commit"`
 	PR struct {
 		Model         string `yaml:"model"`
@@ -99,6 +103,11 @@ func Load() (*Config, error) {
 		commitLanguage = defaultLanguage
 	}
 
+	commitMaxDiffBytes := fileConfig.Commit.MaxDiffBytes
+	if commitMaxDiffBytes <= 0 {
+		commitMaxDiffBytes = DefaultCommitMaxDiffBytes
+	}
+
 	// PR settings
 	prModel := fileConfig.PR.Model
 	if prModel == "" {
@@ -140,19 +149,20 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		ProjectID:       projectID,
-		Location:        location,
-		FlashModel:      actualFlashModel,
-		ProModel:        proModel,
-		BaseFlashModel:  flashModel,
-		BaseProModel:    proModel,
-		CommitLanguage:  commitLanguage,
-		CommitModel:     commitModel,
-		PRLanguage:      prLanguage,
-		PRTitleLanguage: prTitleLanguage,
-		PRBodyLanguage:  prBodyLanguage,
-		PRModel:         prModel,
-		Color:           color,
+		ProjectID:          projectID,
+		Location:           location,
+		FlashModel:         actualFlashModel,
+		ProModel:           proModel,
+		BaseFlashModel:     flashModel,
+		BaseProModel:       proModel,
+		CommitLanguage:     commitLanguage,
+		CommitModel:        commitModel,
+		CommitMaxDiffBytes: commitMaxDiffBytes,
+		PRLanguage:         prLanguage,
+		PRTitleLanguage:    prTitleLanguage,
+		PRBodyLanguage:     prBodyLanguage,
+		PRModel:            prModel,
+		Color:              color,
 	}, nil
 }
 

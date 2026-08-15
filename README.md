@@ -348,6 +348,7 @@ language: string         # Global default language (default: english)
 commit:
   model: string          # Model for commits: "flash", "pro", or custom (default: flash)
   language: string       # Language for commit messages (inherits from global if not set)
+  max_diff_bytes: number # Maximum staged diff size sent to the AI (default: 100000)
 
 pr:
   model: string          # Model for pull requests: "flash", "pro", or custom (default: pro)

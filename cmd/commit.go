@@ -77,6 +77,13 @@ func runCommit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	originalDiffBytes := len(diff)
+	limitedDiff, truncated := git.LimitDiff(diff, cfg.CommitMaxDiffBytes)
+	if truncated {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: staged diff is %d bytes; limiting AI input to %d bytes.\n", originalDiffBytes, cfg.CommitMaxDiffBytes)
+		diff = limitedDiff
+	}
+
 	aiClient, err := ai.NewVertexAIClient(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create AI client: %w", err)
@@ -102,9 +109,17 @@ func runCommit(cmd *cobra.Command, args []string) error {
 						fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", file.Name)
 					}
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "\n=== Full Diff ===\n%s\n\n", diff)
+				diffHeader := "=== Full Diff ==="
+				if truncated {
+					diffHeader = "=== Diff Sent to AI (truncated) ==="
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "\n%s\n%s\n\n", diffHeader, diff)
 			} else {
-				fmt.Fprintf(cmd.ErrOrStderr(), "=== Staged Changes ===\n%s\n\n", diff)
+				diffHeader := "=== Staged Changes ==="
+				if truncated {
+					diffHeader = "=== Staged Changes Sent to AI (truncated) ==="
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "%s\n%s\n\n", diffHeader, diff)
 			}
 		}
 
