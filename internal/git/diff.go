@@ -4,7 +4,10 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
+
+const diffTruncationMarker = "\n\n[diff truncated]"
 
 func GetStagedDiff() (string, error) {
 	cmd := exec.Command("git", "--no-pager", "diff", "--staged", "-U5")
@@ -24,6 +27,38 @@ func GetUnstagedDiff() (string, error) {
 	}
 
 	return strings.TrimSpace(string(output)), nil
+}
+
+// LimitDiff returns a diff that fits within maxBytes and reports whether it was truncated.
+func LimitDiff(diff string, maxBytes int) (string, bool) {
+	if maxBytes <= 0 || len(diff) <= maxBytes {
+		return diff, false
+	}
+
+	if maxBytes <= len(diffTruncationMarker) {
+		return validUTF8Prefix(diff, maxBytes), true
+	}
+
+	prefixLimit := maxBytes - len(diffTruncationMarker)
+	prefix := diff[:prefixLimit]
+	if newline := strings.LastIndexByte(prefix, '\n'); newline > 0 {
+		prefix = prefix[:newline]
+	}
+	prefix = validUTF8Prefix(prefix, len(prefix))
+
+	return prefix + diffTruncationMarker, true
+}
+
+func validUTF8Prefix(value string, maxBytes int) string {
+	if len(value) > maxBytes {
+		value = value[:maxBytes]
+	}
+
+	for len(value) > 0 && !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+
+	return value
 }
 
 func CommitChanges(message string) error {

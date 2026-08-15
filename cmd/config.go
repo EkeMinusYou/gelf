@@ -40,6 +40,7 @@ func runConfigList(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Pro Model:         %s\n", cfg.ProModel)
 	fmt.Printf("Commit Model:      %s\n", cfg.CommitModel)
 	fmt.Printf("Commit Language:   %s\n", cfg.CommitLanguage)
+	fmt.Printf("Commit Diff Limit: %d bytes\n", cfg.CommitMaxDiffBytes)
 	fmt.Printf("PR Model:          %s\n", cfg.PRModel)
 	fmt.Printf("PR Language:       %s\n", cfg.PRLanguage)
 
