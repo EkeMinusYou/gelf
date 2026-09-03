@@ -7,11 +7,12 @@ import (
 )
 
 type PushStatus struct {
-	HasUpstream bool
-	UpstreamRef string
-	RemoteName  string
-	RemoteRef   string
-	HeadPushed  bool
+	HasUpstream   bool
+	UpstreamRef   string
+	RemoteName    string
+	RemoteRef     string
+	HeadPushed    bool
+	NeedForcePush bool
 }
 
 func GetPushStatus(branch string) (PushStatus, error) {
@@ -27,11 +28,9 @@ func GetPushStatus(branch string) (PushStatus, error) {
 		status.UpstreamRef = upstreamRef
 		status.RemoteRef = upstreamRef
 		status.RemoteName = remoteNameFromRef(upstreamRef)
-		pushed, err := isAncestor("HEAD", upstreamRef)
-		if err != nil {
+		if err := compareRefStatus(upstreamRef, &status); err != nil {
 			return status, err
 		}
-		status.HeadPushed = pushed
 		return status, nil
 	}
 
@@ -46,12 +45,42 @@ func GetPushStatus(branch string) (PushStatus, error) {
 		return status, nil
 	}
 
-	pushed, err := isAncestor("HEAD", status.RemoteRef)
-	if err != nil {
+	if err := compareRefStatus(status.RemoteRef, &status); err != nil {
 		return status, err
 	}
-	status.HeadPushed = pushed
 	return status, nil
+}
+
+func compareRefStatus(remoteRef string, status *PushStatus) error {
+	headSHA, err := getRefSHA("HEAD")
+	if err != nil {
+		return err
+	}
+	remoteSHA, err := getRefSHA(remoteRef)
+	if err != nil {
+		return err
+	}
+
+	if headSHA == remoteSHA {
+		status.HeadPushed = true
+		return nil
+	}
+
+	status.HeadPushed = false
+	canFF, err := isAncestor(remoteRef, "HEAD")
+	if err == nil && !canFF {
+		status.NeedForcePush = true
+	}
+	return nil
+}
+
+func getRefSHA(ref string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--verify", ref)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get sha for ref %s: %w", ref, err)
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func getUpstreamRef() (string, bool, error) {
