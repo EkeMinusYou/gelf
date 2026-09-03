@@ -404,6 +404,34 @@ func ensureBranchPushed(cmd *cobra.Command, branch string) (bool, error) {
 		remoteName = "origin"
 	}
 
+	args := []string{"push"}
+	if !status.HasUpstream {
+		args = []string{"push", "-u", remoteName, branch}
+	}
+
+	if status.NeedForcePush {
+		prompt := fmt.Sprintf("Current branch requires force push to %s. Force push now? (y)es / (n)o", remoteName)
+		confirmed, err := ui.PromptYesNoStyledWithWriter(prompt, cmd.ErrOrStderr())
+		if err != nil {
+			return false, err
+		}
+		if !confirmed {
+			return false, nil
+		}
+
+		forceArgs := append(append([]string{}, args...), "--force-with-lease")
+		out, err := executePush(forceArgs, "Force pushing branch...", cmd.ErrOrStderr())
+		if err != nil {
+			if out == "" {
+				return false, fmt.Errorf("failed to push branch: %w", err)
+			}
+			return false, fmt.Errorf("failed to push branch: %w\n%s", err, out)
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\n\n", ui.RenderSuccessHeader("✓ Push succeeded"))
+		return true, nil
+	}
+
 	prompt := fmt.Sprintf("Current branch is not pushed to %s. Push now? (y)es / (n)o", remoteName)
 	confirmed, err := ui.PromptYesNoStyledWithWriter(prompt, cmd.ErrOrStderr())
 	if err != nil {
@@ -413,29 +441,59 @@ func ensureBranchPushed(cmd *cobra.Command, branch string) (bool, error) {
 		return false, nil
 	}
 
-	args := []string{"push"}
-	if !status.HasUpstream {
-		args = []string{"push", "-u", remoteName, branch}
-	}
+	out, err := executePush(args, "Pushing branch...", cmd.ErrOrStderr())
+	if err != nil {
+		if isNonFastForwardError(out) {
+			forcePrompt := fmt.Sprintf("Push was rejected (non-fast-forward). Force push to %s? (y)es / (n)o", remoteName)
+			forceConfirmed, promptErr := ui.PromptYesNoStyledWithWriter(forcePrompt, cmd.ErrOrStderr())
+			if promptErr != nil {
+				return false, promptErr
+			}
+			if !forceConfirmed {
+				return false, nil
+			}
 
-	pushCmd := exec.Command("git", args...)
-	var pushOutput bytes.Buffer
-	pushCmd.Stdout = &pushOutput
-	pushCmd.Stderr = &pushOutput
-	stopSpinner := ui.StartSpinnerInline("Pushing branch...", cmd.ErrOrStderr())
-	if err := pushCmd.Run(); err != nil {
-		stopSpinner()
-		trimmed := strings.TrimSpace(pushOutput.String())
-		if trimmed == "" {
+			forceArgs := append(append([]string{}, args...), "--force-with-lease")
+			forceOut, forceErr := executePush(forceArgs, "Force pushing branch...", cmd.ErrOrStderr())
+			if forceErr != nil {
+				if forceOut == "" {
+					return false, fmt.Errorf("failed to push branch: %w", forceErr)
+				}
+				return false, fmt.Errorf("failed to push branch: %w\n%s", forceErr, forceOut)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\n\n", ui.RenderSuccessHeader("✓ Push succeeded"))
+			return true, nil
+		}
+
+		if out == "" {
 			return false, fmt.Errorf("failed to push branch: %w", err)
 		}
-		return false, fmt.Errorf("failed to push branch: %w\n%s", err, trimmed)
+		return false, fmt.Errorf("failed to push branch: %w\n%s", err, out)
 	}
-	stopSpinner()
 
 	fmt.Fprintf(cmd.OutOrStdout(), "%s\n\n", ui.RenderSuccessHeader("✓ Push succeeded"))
 
 	return true, nil
+}
+
+func executePush(args []string, message string, stderr io.Writer) (string, error) {
+	pushCmd := exec.Command("git", args...)
+	var pushOutput bytes.Buffer
+	pushCmd.Stdout = &pushOutput
+	pushCmd.Stderr = &pushOutput
+	stopSpinner := ui.StartSpinnerInline(message, stderr)
+	err := pushCmd.Run()
+	stopSpinner()
+	return strings.TrimSpace(pushOutput.String()), err
+}
+
+func isNonFastForwardError(output string) bool {
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "non-fast-forward") ||
+		strings.Contains(lower, "fetch first") ||
+		strings.Contains(lower, "tip of your current branch is behind") ||
+		strings.Contains(lower, "branch tip is behind its remote")
 }
 
 func runCommandWithSpinner(cmd *exec.Cmd, message string, stdout, stderr io.Writer) error {

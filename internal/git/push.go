@@ -7,11 +7,12 @@ import (
 )
 
 type PushStatus struct {
-	HasUpstream bool
-	UpstreamRef string
-	RemoteName  string
-	RemoteRef   string
-	HeadPushed  bool
+	HasUpstream   bool
+	UpstreamRef   string
+	RemoteName    string
+	RemoteRef     string
+	HeadPushed    bool
+	NeedForcePush bool
 }
 
 func GetPushStatus(branch string) (PushStatus, error) {
@@ -32,6 +33,12 @@ func GetPushStatus(branch string) (PushStatus, error) {
 			return status, err
 		}
 		status.HeadPushed = pushed
+		if !pushed {
+			canFF, err := isAncestor(upstreamRef, "HEAD")
+			if err == nil && !canFF {
+				status.NeedForcePush = true
+			}
+		}
 		return status, nil
 	}
 
@@ -51,6 +58,12 @@ func GetPushStatus(branch string) (PushStatus, error) {
 		return status, err
 	}
 	status.HeadPushed = pushed
+	if !pushed {
+		canFF, err := isAncestor(status.RemoteRef, "HEAD")
+		if err == nil && !canFF {
+			status.NeedForcePush = true
+		}
+	}
 	return status, nil
 }
 
