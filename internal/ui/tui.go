@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type state int
@@ -25,7 +24,12 @@ const (
 )
 
 type model struct {
-	aiClient        *ai.VertexAIClient
+	session         *Session
+	styles          Styles
+	ctx             context.Context
+	cancel          context.CancelFunc
+	commit          func(context.Context, string) error
+	aiClient        ai.Client
 	diff            string
 	diffSummary     git.DiffSummary
 	commitMessage   string
@@ -46,22 +50,22 @@ type msgCommitDone struct {
 	err error
 }
 
-func NewTUI(aiClient *ai.VertexAIClient, diff string, commitLanguage string) *model {
+func NewTUI(session *Session, aiClient ai.Client, diff string, summary git.DiffSummary, commitLanguage string, commit func(context.Context, string) error) *model {
+	ctx, cancel := context.WithCancel(session.Context)
 	s := spinner.New()
 	s.Spinner = spinner.Dot
-	s.Style = loadingStyle
+	s.Style = session.Styles.Loading
 
 	ti := textinput.New()
 	ti.Placeholder = "Enter your commit message..."
 	ti.CharLimit = 0
 	ti.Width = 60
 
-	diffSummary := git.ParseDiffSummary(diff)
-
 	return &model{
+		session: session, styles: session.Styles, ctx: ctx, cancel: cancel, commit: commit,
 		aiClient:       aiClient,
 		diff:           diff,
-		diffSummary:    diffSummary,
+		diffSummary:    summary,
 		state:          stateLoading,
 		spinner:        s,
 		textInput:      ti,
@@ -78,6 +82,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" && m.state != stateCommitting {
+			return m, tea.Quit
+		}
 		switch m.state {
 		case stateLoading:
 			switch msg.String() {
@@ -123,6 +130,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = msg.err
 			m.state = stateError
+			return m, tea.Quit
 		} else {
 			m.commitMessage = msg.message
 			m.state = stateConfirm
@@ -152,7 +160,7 @@ func (m *model) View() string {
 	case stateLoading:
 		loadingText := fmt.Sprintf("%s %s",
 			m.spinner.View(),
-			loadingStyle.Render("Generating commit message..."))
+			m.styles.Loading.Render("Generating commit message..."))
 
 		diffSummary := m.formatDiffSummary()
 		if diffSummary != "" {
@@ -162,9 +170,9 @@ func (m *model) View() string {
 
 	case stateConfirm:
 		diffSummary := m.formatDiffSummary()
-		header := titleStyle.Render("📝 Generated Commit Message:")
-		message := messageStyle.Render(m.commitMessage)
-		prompt := promptStyle.Render("Commit this message? (y)es / (e)dit / (n)o")
+		header := m.styles.Title.Render("📝 Generated Commit Message:")
+		message := m.styles.Message.Render(m.commitMessage)
+		prompt := m.styles.Prompt.Render("Commit this message? (y)es / (e)dit / (n)o")
 
 		if diffSummary != "" {
 			return fmt.Sprintf("%s\n\n%s\n\n%s\n\n%s", diffSummary, header, message, prompt)
@@ -173,9 +181,9 @@ func (m *model) View() string {
 
 	case stateEditing:
 		diffSummary := m.formatDiffSummary()
-		header := titleStyle.Render("✏️  Edit Commit Message:")
+		header := m.styles.Title.Render("✏️  Edit Commit Message:")
 		inputView := m.textInput.View()
-		prompt := editPromptStyle.Render("Press Enter to confirm, Esc to cancel")
+		prompt := m.styles.EditPrompt.Render("Press Enter to confirm, Esc to cancel")
 
 		if diffSummary != "" {
 			return fmt.Sprintf("%s\n\n%s\n\n%s\n\n%s", diffSummary, header, inputView, prompt)
@@ -185,13 +193,13 @@ func (m *model) View() string {
 	case stateCommitting:
 		return fmt.Sprintf("%s %s",
 			m.spinner.View(),
-			loadingStyle.Render("Committing changes..."))
+			m.styles.Loading.Render("Committing changes..."))
 
 	case stateSuccess:
 		return ""
 
 	case stateError:
-		return errorStyle.Render(fmt.Sprintf("✗ Error: %v", m.err))
+		return m.styles.Error.Render(fmt.Sprintf("✗ Error: %v", m.err))
 	}
 
 	return ""
@@ -199,7 +207,7 @@ func (m *model) View() string {
 
 func (m *model) generateCommitMessage() tea.Cmd {
 	return tea.Cmd(func() tea.Msg {
-		ctx := context.Background()
+		ctx := m.ctx
 		message, err := m.aiClient.GenerateCommitMessage(ctx, m.diff, m.commitLanguage)
 		return msgCommitGenerated{
 			message: strings.TrimSpace(message),
@@ -210,120 +218,31 @@ func (m *model) generateCommitMessage() tea.Cmd {
 
 func (m *model) commitChanges() tea.Cmd {
 	return tea.Cmd(func() tea.Msg {
-		err := git.CommitChanges(m.commitMessage)
+		err := m.commit(m.ctx, m.commitMessage)
 		return msgCommitDone{err: err}
 	})
 }
 
 func (m *model) formatDiffSummary() string {
-	if len(m.diffSummary.Files) == 0 {
-		return ""
-	}
-
-	var parts []string
-	parts = append(parts, diffStyle.Render("📄 Changed Files:"))
-
-	for _, file := range m.diffSummary.Files {
-		fileName := fileStyle.Render(file.Name)
-
-		var changes []string
-		if file.AddedLines > 0 {
-			changes = append(changes, addedStyle.Render(fmt.Sprintf("+%d", file.AddedLines)))
-		}
-		if file.DeletedLines > 0 {
-			changes = append(changes, deletedStyle.Render(fmt.Sprintf("-%d", file.DeletedLines)))
-		}
-
-		if len(changes) > 0 {
-			parts = append(parts, fmt.Sprintf(" • %s (%s)", fileName, strings.Join(changes, ", ")))
-		} else {
-			parts = append(parts, fmt.Sprintf(" • %s", fileName))
-		}
-	}
-
-	return strings.Join(parts, "\n")
+	return formatDiffSummary(m.diffSummary, m.styles)
 }
 
-func (m *model) Run() error {
-	p := tea.NewProgram(m)
+func (m *model) Run(options ...tea.ProgramOption) error {
+	defer m.cancel()
+	options = append([]tea.ProgramOption{tea.WithContext(m.ctx), tea.WithInput(m.session.In), tea.WithOutput(m.session.Out)}, options...)
+	p := tea.NewProgram(m, options...)
 	_, err := p.Run()
 
 	// Print success message after TUI exits so it remains visible
 	if m.state == stateSuccess {
-		header := successStyle.Render("✓ Commit successful")
-		message := messageStyle.Render(m.commitMessage)
+		header := m.styles.Success.Render("✓ Commit successful")
+		message := m.styles.Message.Render(m.commitMessage)
 
-		fmt.Printf("%s\n%s\n", header, message)
+		fmt.Fprintf(m.session.Out, "%s\n%s\n", header, message)
 	}
 
-	return err
-}
-
-// TUI styles shared across commands.
-var (
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("6"))
-
-	messageStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("15")).
-			Bold(true).
-			Italic(true)
-
-	promptStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("4")).
-			Bold(true)
-
-	successStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("2")).
-			Bold(true)
-
-	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("1")).
-			Bold(true)
-
-	loadingStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("6")).
-			Bold(true)
-
-	editPromptStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("3")).
-			Bold(true)
-
-	diffStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("7"))
-
-	fileStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("5")).
-			Bold(true)
-
-	addedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("2"))
-
-	deletedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("1"))
-
-	subtleStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("8"))
-
-	urlStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("4")).
-			Underline(true)
-)
-
-func DisableColor() {
-	// No color styles
-	titleStyle = lipgloss.NewStyle().Bold(true)
-	messageStyle = lipgloss.NewStyle().Bold(true).Italic(true)
-	promptStyle = lipgloss.NewStyle().Bold(true)
-	successStyle = lipgloss.NewStyle().Bold(true)
-	errorStyle = lipgloss.NewStyle().Bold(true)
-	loadingStyle = lipgloss.NewStyle().Bold(true)
-	editPromptStyle = lipgloss.NewStyle().Bold(true)
-	diffStyle = lipgloss.NewStyle()
-	fileStyle = lipgloss.NewStyle().Bold(true)
-	addedStyle = lipgloss.NewStyle()
-	deletedStyle = lipgloss.NewStyle()
-	subtleStyle = lipgloss.NewStyle()
-	urlStyle = lipgloss.NewStyle()
+	if err != nil {
+		return err
+	}
+	return m.err
 }

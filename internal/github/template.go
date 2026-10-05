@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,7 +39,7 @@ var templateDirCandidates = []string{
 	"docs/pull_request_template",
 }
 
-func FindPullRequestTemplate(ctx context.Context, repoRoot, token, owner string) (*PullRequestTemplate, error) {
+func (c *Client) FindPullRequestTemplate(ctx context.Context, repoRoot, owner string) (*PullRequestTemplate, error) {
 	localTemplate, err := findLocalPullRequestTemplate(repoRoot)
 	if err != nil {
 		return nil, err
@@ -46,11 +48,15 @@ func FindPullRequestTemplate(ctx context.Context, repoRoot, token, owner string)
 		return localTemplate, nil
 	}
 
-	if owner == "" || token == "" {
+	if owner == "" {
 		return nil, nil
 	}
 
-	return findOrgPullRequestTemplate(ctx, token, owner)
+	token, err := c.AuthToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.findOrgPullRequestTemplate(ctx, token, owner)
 }
 
 func findLocalPullRequestTemplate(repoRoot string) (*PullRequestTemplate, error) {
@@ -58,7 +64,10 @@ func findLocalPullRequestTemplate(repoRoot string) (*PullRequestTemplate, error)
 		path := filepath.Join(repoRoot, relPath)
 		info, err := os.Stat(path)
 		if err != nil {
-			continue
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to inspect template %s: %w", relPath, err)
 		}
 		if info.IsDir() {
 			continue
@@ -79,7 +88,13 @@ func findLocalPullRequestTemplate(repoRoot string) (*PullRequestTemplate, error)
 	for _, relDir := range templateDirCandidates {
 		dirPath := filepath.Join(repoRoot, relDir)
 		info, err := os.Stat(dirPath)
-		if err != nil || !info.IsDir() {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to inspect template directory %s: %w", relDir, err)
+		}
+		if !info.IsDir() {
 			continue
 		}
 
@@ -137,11 +152,11 @@ func isTemplateFile(name string) bool {
 	return strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") || strings.HasSuffix(lower, ".txt")
 }
 
-func findOrgPullRequestTemplate(ctx context.Context, token, owner string) (*PullRequestTemplate, error) {
+func (c *Client) findOrgPullRequestTemplate(ctx context.Context, token, owner string) (*PullRequestTemplate, error) {
 	orgRepo := ".github"
 
 	for _, relPath := range templateFileCandidates {
-		content, found, err := fetchGitHubFile(ctx, token, owner, orgRepo, relPath)
+		content, found, err := c.fetchGitHubFile(ctx, token, owner, orgRepo, relPath)
 		if err != nil {
 			return nil, err
 		}
@@ -155,7 +170,7 @@ func findOrgPullRequestTemplate(ctx context.Context, token, owner string) (*Pull
 	}
 
 	for _, relDir := range templateDirCandidates {
-		selected, err := fetchGitHubDirTemplate(ctx, token, owner, orgRepo, relDir)
+		selected, err := c.fetchGitHubDirTemplate(ctx, token, owner, orgRepo, relDir)
 		if err != nil {
 			return nil, err
 		}
@@ -178,8 +193,8 @@ type dirTemplate struct {
 	Content string
 }
 
-func fetchGitHubDirTemplate(ctx context.Context, token, owner, repo, dirPath string) (*dirTemplate, error) {
-	entries, found, err := fetchGitHubDir(ctx, token, owner, repo, dirPath)
+func (c *Client) fetchGitHubDirTemplate(ctx context.Context, token, owner, repo, dirPath string) (*dirTemplate, error) {
+	entries, found, err := c.fetchGitHubDir(ctx, token, owner, repo, dirPath)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +218,7 @@ func fetchGitHubDirTemplate(ctx context.Context, token, owner, repo, dirPath str
 
 	sort.Strings(candidates)
 	selectedPath := candidates[0]
-	content, found, err := fetchGitHubFile(ctx, token, owner, repo, selectedPath)
+	content, found, err := c.fetchGitHubFile(ctx, token, owner, repo, selectedPath)
 	if err != nil {
 		return nil, err
 	}
@@ -223,8 +238,8 @@ type githubDirEntry struct {
 	Type string `json:"type"`
 }
 
-func fetchGitHubDir(ctx context.Context, token, owner, repo, path string) ([]githubDirEntry, bool, error) {
-	body, status, err := fetchGitHubContent(ctx, token, owner, repo, path)
+func (c *Client) fetchGitHubDir(ctx context.Context, token, owner, repo, path string) ([]githubDirEntry, bool, error) {
+	body, status, err := c.fetchGitHubContent(ctx, token, owner, repo, path)
 	if err != nil {
 		return nil, false, err
 	}
@@ -243,8 +258,8 @@ func fetchGitHubDir(ctx context.Context, token, owner, repo, path string) ([]git
 	return entries, true, nil
 }
 
-func fetchGitHubFile(ctx context.Context, token, owner, repo, path string) (string, bool, error) {
-	body, status, err := fetchGitHubContent(ctx, token, owner, repo, path)
+func (c *Client) fetchGitHubFile(ctx context.Context, token, owner, repo, path string) (string, bool, error) {
+	body, status, err := c.fetchGitHubContent(ctx, token, owner, repo, path)
 	if err != nil {
 		return "", false, err
 	}
@@ -281,9 +296,20 @@ func fetchGitHubFile(ctx context.Context, token, owner, repo, path string) (stri
 	return content, true, nil
 }
 
-func fetchGitHubContent(ctx context.Context, token, owner, repo, path string) ([]byte, int, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/contents/%s", owner, repo, path)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (c *Client) fetchGitHubContent(ctx context.Context, token, owner, repo, path string) ([]byte, int, error) {
+	baseURL := c.APIBaseURL
+	if baseURL == "" {
+		baseURL = "https://api.github.com"
+		if c.Host != "github.com" {
+			baseURL = "https://" + c.Host + "/api/v3"
+		}
+	}
+	escaped := strings.Split(path, "/")
+	for i := range escaped {
+		escaped[i] = url.PathEscape(escaped[i])
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/contents/%s", strings.TrimRight(baseURL, "/"), url.PathEscape(owner), url.PathEscape(repo), strings.Join(escaped, "/"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -294,7 +320,7 @@ func fetchGitHubContent(ctx context.Context, token, owner, repo, path string) ([
 		req.Header.Set("Authorization", "token "+token)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -1,91 +1,110 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
+	"os/signal"
+	"runtime/debug"
 	"strings"
 
+	"github.com/EkeMinusYou/gelf/internal/ai"
+	"github.com/EkeMinusYou/gelf/internal/config"
+	"github.com/EkeMinusYou/gelf/internal/git"
+	"github.com/EkeMinusYou/gelf/internal/github"
+	"github.com/EkeMinusYou/gelf/internal/process"
 	"github.com/spf13/cobra"
 )
 
-// version will be set at build time via ldflags
+// version is set by release builds using ldflags.
 var version = "dev"
 
-var rootCmd = &cobra.Command{
-	Use:   "gelf",
-	Short: "AI-powered Git commit message generator using Vertex AI (Gemini)",
-	Long: `gelf is a CLI tool that generates Git commit messages using Vertex AI (Gemini).
-It analyzes staged changes and creates appropriate commit messages through an interactive TUI.`,
+type dependencies struct {
+	Git        *git.Repository
+	GitHub     *github.Client
+	LoadConfig func() (*config.Config, error)
+	NewAI      func(context.Context, *config.Config, string) (ai.Client, error)
 }
 
-var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print the version number of gelf",
-	Run: func(cmd *cobra.Command, args []string) {
-		if version == "dev" {
-			// Try to get git commit hash when installed via go install
-			if hash := getGitCommitHash(); hash != "" {
-				fmt.Println(hash)
-			} else {
-				fmt.Println(version)
-			}
-		} else {
-			fmt.Println(version)
-		}
-	},
-}
-
-func getGitCommitHash() string {
-	cmd := exec.Command("git", "rev-parse", "--short", "HEAD")
-	output, err := cmd.Output()
-	if err != nil {
-		return ""
+func defaultDependencies() dependencies {
+	runner := process.CommandRunner{}
+	return dependencies{
+		Git: &git.Repository{Runner: runner}, GitHub: github.NewClient(runner), LoadConfig: config.Load,
+		NewAI: func(ctx context.Context, cfg *config.Config, model string) (ai.Client, error) {
+			return ai.NewVertexAIClient(ctx, cfg, model)
+		},
 	}
-	return strings.TrimSpace(string(output))
 }
 
-func Execute() error {
-	return rootCmd.Execute()
-}
+func NewRootCommand() *cobra.Command { return newRootCommand(defaultDependencies()) }
 
-func init() {
-	rootCmd.AddCommand(commitCmd)
-	rootCmd.AddCommand(prCmd)
-	rootCmd.AddCommand(versionCmd)
-
-	// Add completion commands
-	rootCmd.AddCommand(&cobra.Command{
-		Use:   "completion [bash|zsh|fish|powershell]",
-		Short: "Generate completion script",
-		Long: `Generate completion script for the specified shell.
-
-Examples:
-  # bash completion
-  gelf completion bash > /usr/local/etc/bash_completion.d/gelf
-  
-  # zsh completion
-  gelf completion zsh > "${fpath[1]}/_gelf"
-  
-  # fish completion
-  gelf completion fish > ~/.config/fish/completions/gelf.fish
-  
-  # powershell completion
-  gelf completion powershell > gelf.ps1`,
-		DisableFlagsInUseLine: true,
-		ValidArgs:             []string{"bash", "zsh", "fish", "powershell"},
-		Args:                  cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
-		Run: func(cmd *cobra.Command, args []string) {
+func newRootCommand(deps dependencies) *cobra.Command {
+	root := &cobra.Command{
+		Use: "gelf", Short: "AI-powered Git commit and pull request generator using Vertex AI (Gemini)",
+		SilenceUsage: true,
+	}
+	root.CompletionOptions.DisableDefaultCmd = true
+	root.AddCommand(newCommitCommand(deps), newPRCommand(deps), newConfigCommand(deps))
+	root.AddCommand(&cobra.Command{Use: "version", Short: "Print the version number of gelf", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			info, _ := debug.ReadBuildInfo()
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), buildVersion(info, version))
+			return err
+		},
+	})
+	root.AddCommand(&cobra.Command{
+		Use: "completion [bash|zsh|fish|powershell]", Short: "Generate completion script",
+		DisableFlagsInUseLine: true, ValidArgs: []string{"bash", "zsh", "fish", "powershell"},
+		Args: cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
 			switch args[0] {
 			case "bash":
-				cmd.Root().GenBashCompletion(os.Stdout)
+				return cmd.Root().GenBashCompletion(out)
 			case "zsh":
-				cmd.Root().GenZshCompletion(os.Stdout)
+				return cmd.Root().GenZshCompletion(out)
 			case "fish":
-				cmd.Root().GenFishCompletion(os.Stdout, true)
-			case "powershell":
-				cmd.Root().GenPowerShellCompletionWithDesc(os.Stdout)
+				return cmd.Root().GenFishCompletion(out, true)
+			default:
+				return cmd.Root().GenPowerShellCompletionWithDesc(out)
 			}
 		},
 	})
+	return root
+}
+
+func buildVersion(info *debug.BuildInfo, release string) string {
+	if release != "" && release != "dev" {
+		return release
+	}
+	if info != nil {
+		if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			return info.Main.Version
+		}
+		revision, modified := "", false
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				revision = setting.Value
+			case "vcs.modified":
+				modified = setting.Value == "true"
+			}
+		}
+		if revision != "" {
+			if len(revision) > 12 {
+				revision = revision[:12]
+			}
+			if modified {
+				revision += "-dirty"
+			}
+			return revision
+		}
+	}
+	return strings.TrimSpace(release)
+}
+
+func Execute() error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+	return NewRootCommand().ExecuteContext(ctx)
 }

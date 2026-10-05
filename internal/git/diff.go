@@ -1,32 +1,26 @@
 package git
 
 import (
-	"os/exec"
-	"regexp"
+	"context"
+	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
 
 const diffTruncationMarker = "\n\n[diff truncated]"
 
-func GetStagedDiff() (string, error) {
-	cmd := exec.Command("git", "--no-pager", "diff", "--staged", "-U5")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-
-	return strings.TrimSpace(string(output)), nil
+func (r *Repository) StagedDiff(ctx context.Context) (string, error) {
+	out, err := r.run(ctx, "--no-pager", "diff", "--staged", "--no-ext-diff", "--no-color", "-U5", "--")
+	return strings.TrimSpace(out), err
 }
 
-func GetUnstagedDiff() (string, error) {
-	cmd := exec.Command("git", "--no-pager", "diff", "-U5")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
+func (r *Repository) Commit(ctx context.Context, message string) error {
+	if strings.TrimSpace(message) == "" {
+		return fmt.Errorf("commit message must not be empty")
 	}
-
-	return strings.TrimSpace(string(output)), nil
+	_, err := r.run(ctx, "commit", "-m", message)
+	return err
 }
 
 // LimitDiff returns a diff that fits within maxBytes and reports whether it was truncated.
@@ -61,53 +55,64 @@ func validUTF8Prefix(value string, maxBytes int) string {
 	return value
 }
 
-func CommitChanges(message string) error {
-	cmd := exec.Command("git", "commit", "-m", message)
-	return cmd.Run()
-}
-
 type DiffSummary struct {
 	Files []FileDiff
 }
 
 type FileDiff struct {
+	OldName      string
+	Binary       bool
 	Name         string
 	AddedLines   int
 	DeletedLines int
 }
 
-func ParseDiffSummary(diff string) DiffSummary {
+func (r *Repository) StagedSummary(ctx context.Context) (DiffSummary, error) {
+	out, err := r.run(ctx, "diff", "--staged", "--no-ext-diff", "--numstat", "-z", "--")
+	if err != nil {
+		return DiffSummary{}, err
+	}
+	return parseNumstat(out)
+}
+
+func (r *Repository) CommittedSummary(ctx context.Context, base, head string) (DiffSummary, error) {
+	out, err := r.run(ctx, "diff", "--no-ext-diff", "--numstat", "-z", base+"..."+head, "--")
+	if err != nil {
+		return DiffSummary{}, err
+	}
+	return parseNumstat(out)
+}
+
+func parseNumstat(out string) (DiffSummary, error) {
 	summary := DiffSummary{Files: []FileDiff{}}
-
-	fileRegex := regexp.MustCompile(`^diff --git a/(.*) b/(.*)$`)
-	addedRegex := regexp.MustCompile(`^\+[^+].*$`)
-	deletedRegex := regexp.MustCompile(`^-[^-].*$`)
-
-	lines := strings.Split(diff, "\n")
-	var currentFile *FileDiff
-
-	for _, line := range lines {
-		if matches := fileRegex.FindStringSubmatch(line); matches != nil {
-			if currentFile != nil {
-				summary.Files = append(summary.Files, *currentFile)
+	records := strings.Split(out, "\x00")
+	for i := 0; i < len(records) && records[i] != ""; i++ {
+		fields := strings.SplitN(records[i], "\t", 3)
+		if len(fields) != 3 {
+			return summary, fmt.Errorf("invalid numstat record %q", records[i])
+		}
+		file := FileDiff{Name: fields[2]}
+		if file.Name == "" {
+			if i+2 >= len(records) {
+				return summary, fmt.Errorf("incomplete rename record")
 			}
-			currentFile = &FileDiff{
-				Name:         matches[1],
-				AddedLines:   0,
-				DeletedLines: 0,
+			file.OldName, file.Name = records[i+1], records[i+2]
+			i += 2
+		}
+		if fields[0] == "-" && fields[1] == "-" {
+			file.Binary = true
+		} else {
+			var err error
+			file.AddedLines, err = strconv.Atoi(fields[0])
+			if err != nil {
+				return summary, err
 			}
-		} else if currentFile != nil {
-			if addedRegex.MatchString(line) {
-				currentFile.AddedLines++
-			} else if deletedRegex.MatchString(line) {
-				currentFile.DeletedLines++
+			file.DeletedLines, err = strconv.Atoi(fields[1])
+			if err != nil {
+				return summary, err
 			}
 		}
+		summary.Files = append(summary.Files, file)
 	}
-
-	if currentFile != nil {
-		summary.Files = append(summary.Files, *currentFile)
-	}
-
-	return summary
+	return summary, nil
 }

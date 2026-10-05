@@ -1,9 +1,7 @@
 package ui
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
@@ -11,7 +9,9 @@ import (
 )
 
 type prModel struct {
-	aiClient       *ai.VertexAIClient
+	session        *Session
+	styles         Styles
+	aiClient       ai.Client
 	input          ai.PullRequestInput
 	diffSummary    git.DiffSummary
 	commitLines    []string
@@ -23,17 +23,17 @@ type prModel struct {
 	confirmPrompt  string
 }
 
-func NewPRTUI(aiClient *ai.VertexAIClient, input ai.PullRequestInput, render bool, useColor bool, confirmPrompt string) *prModel {
-	diffSummary := git.ParseDiffSummary(input.Diff)
+func NewPRTUI(session *Session, aiClient ai.Client, input ai.PullRequestInput, summary git.DiffSummary, render bool, confirmPrompt string) *prModel {
 	commitLines := parseCommitLines(input.CommitLog)
 
 	return &prModel{
+		session: session, styles: session.Styles,
 		aiClient:    aiClient,
 		input:       input,
-		diffSummary: diffSummary,
+		diffSummary: summary,
 		commitLines: commitLines,
 		render:      render,
-		useColor:    useColor,
+		useColor:    session.UseColor,
 		confirmPrompt: func() string {
 			if strings.TrimSpace(confirmPrompt) == "" {
 				return "Create this pull request? (y)es / (r)evise / (n)o"
@@ -44,8 +44,8 @@ func NewPRTUI(aiClient *ai.VertexAIClient, input ai.PullRequestInput, render boo
 }
 
 func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
-	ctx := context.Background()
-	loadingContext := formatPRContext(m.diffSummary, m.commitLines)
+	ctx := m.session.Context
+	loadingContext := formatPRContext(m.diffSummary, m.commitLines, m.styles)
 	stopSpinner := m.startLoadingIndicator(loadingContext)
 	content, err := m.aiClient.GeneratePullRequestContent(ctx, m.input)
 	stopSpinner()
@@ -56,11 +56,11 @@ func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
 	m.content = content
 	m.refreshRenderedBody()
 
-	fmt.Printf("%s\n", m.buildPRContent())
-	fmt.Println()
+	fmt.Fprintf(m.session.Out, "%s\n", m.buildPRContent())
+	fmt.Fprintln(m.session.Out)
 
 	for {
-		choice, err := PromptPRChoiceStyled(m.confirmPrompt)
+		choice, err := m.session.PRChoice(m.confirmPrompt)
 		if err != nil {
 			return nil, false, err
 		}
@@ -71,7 +71,7 @@ func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
 		case PRChoiceNo:
 			return m.content, false, nil
 		case PRChoiceRevise:
-			instructions, ok, err := PromptLineStyled(
+			instructions, ok, err := m.session.Line(
 				"💬 Tell me how to revise the pull request:",
 				"e.g. shorten the title and clarify the summary",
 			)
@@ -86,7 +86,7 @@ func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
 			revised, err := m.aiClient.RevisePullRequestContent(ctx, m.input, m.content, instructions)
 			revisionStop()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "%s\n\n", errorStyle.Render(fmt.Sprintf("✗ Failed to revise pull request: %v", err)))
+				fmt.Fprintf(m.session.Err, "%s\n\n", m.styles.Error.Render(fmt.Sprintf("✗ Failed to revise pull request: %v", err)))
 				continue
 			}
 
@@ -94,9 +94,9 @@ func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
 			m.refreshRenderedBody()
 			m.printedContext = true
 
-			fmt.Println()
-			fmt.Printf("%s\n", m.buildPRContent())
-			fmt.Println()
+			fmt.Fprintln(m.session.Out)
+			fmt.Fprintf(m.session.Out, "%s\n", m.buildPRContent())
+			fmt.Fprintln(m.session.Out)
 		}
 	}
 }
@@ -113,29 +113,29 @@ func (m *prModel) refreshRenderedBody() {
 }
 
 func (m *prModel) startLoadingIndicator(context string) func() {
-	if !isTerminalWriter(os.Stderr) {
+	if !isTerminalWriter(m.session.Err) {
 		return func() {}
 	}
 
 	if strings.TrimSpace(context) != "" {
-		fmt.Fprintln(os.Stderr, context)
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(m.session.Err, context)
+		fmt.Fprintln(m.session.Err)
 		m.printedContext = true
 	}
 
-	return StartSpinner("Generating pull request message...", os.Stderr)
+	return m.session.Spinner("Generating pull request message...", false)
 }
 
 func (m *prModel) startRevisionIndicator() func() {
-	if !isTerminalWriter(os.Stderr) {
+	if !isTerminalWriter(m.session.Err) {
 		return func() {}
 	}
-	return StartSpinner("Revising pull request based on your feedback...", os.Stderr)
+	return m.session.Spinner("Revising pull request based on your feedback...", false)
 }
 
 func (m *prModel) buildPRContent() string {
-	header := titleStyle.Render("📝 Generated Pull Request:")
-	title := messageStyle.Render(m.content.Title)
+	header := m.styles.Title.Render("📝 Generated Pull Request:")
+	title := m.styles.Message.Render(m.content.Title)
 	body := m.content.Body
 	if m.render && m.renderedBody != "" {
 		body = m.renderedBody
@@ -143,7 +143,7 @@ func (m *prModel) buildPRContent() string {
 
 	sections := []string{}
 	if !m.printedContext {
-		context := formatPRContext(m.diffSummary, m.commitLines)
+		context := formatPRContext(m.diffSummary, m.commitLines, m.styles)
 		if context != "" {
 			sections = append(sections, context)
 		}
@@ -153,52 +153,23 @@ func (m *prModel) buildPRContent() string {
 	return strings.Join(sections, "\n\n")
 }
 
-func formatPRDiffSummary(summary git.DiffSummary) string {
-	if len(summary.Files) == 0 {
-		return ""
-	}
-
-	var parts []string
-	parts = append(parts, diffStyle.Render("📄 Changed Files:"))
-
-	for _, file := range summary.Files {
-		fileName := fileStyle.Render(file.Name)
-
-		var changes []string
-		if file.AddedLines > 0 {
-			changes = append(changes, addedStyle.Render(fmt.Sprintf("+%d", file.AddedLines)))
-		}
-		if file.DeletedLines > 0 {
-			changes = append(changes, deletedStyle.Render(fmt.Sprintf("-%d", file.DeletedLines)))
-		}
-
-		if len(changes) > 0 {
-			parts = append(parts, fmt.Sprintf(" • %s (%s)", fileName, strings.Join(changes, ", ")))
-		} else {
-			parts = append(parts, fmt.Sprintf(" • %s", fileName))
-		}
-	}
-
-	return strings.Join(parts, "\n")
-}
-
-func formatPRContext(summary git.DiffSummary, commitLines []string) string {
+func formatPRContext(summary git.DiffSummary, commitLines []string, styles Styles) string {
 	sections := []string{}
 
-	diffSummary := formatPRDiffSummary(summary)
+	diffSummary := formatDiffSummary(summary, styles)
 	if diffSummary != "" {
 		sections = append(sections, diffSummary)
 	}
 
 	if len(commitLines) > 0 {
-		sections = append(sections, formatPRCommitLog(commitLines))
+		sections = append(sections, formatPRCommitLog(commitLines, styles))
 	}
 
 	return strings.Join(sections, "\n\n")
 }
 
-func formatPRCommitLog(commitLines []string) string {
-	parts := []string{diffStyle.Render("🧾 Commits:")}
+func formatPRCommitLog(commitLines []string, styles Styles) string {
+	parts := []string{styles.Diff.Render("🧾 Commits:")}
 	for _, line := range commitLines {
 		parts = append(parts, fmt.Sprintf(" • %s", line))
 	}
@@ -215,10 +186,4 @@ func parseCommitLines(log string) []string {
 		lines = append(lines, line)
 	}
 	return lines
-}
-
-func FormatPRContext(diff string, commitLog string) string {
-	diffSummary := git.ParseDiffSummary(diff)
-	commitLines := parseCommitLines(commitLog)
-	return formatPRContext(diffSummary, commitLines)
 }

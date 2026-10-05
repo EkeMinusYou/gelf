@@ -4,9 +4,11 @@ go 1.25.8
 
 require (
 	charm.land/glamour/v2 v2.0.0
+	cloud.google.com/go/auth v0.18.1
 	github.com/charmbracelet/bubbles v0.21.1
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.1-0.20260202080749-832bc9d6b9d2
+	github.com/muesli/termenv v0.16.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/term v0.39.0
 	google.golang.org/genai v1.45.0
@@ -16,7 +18,6 @@ require (
 require (
 	charm.land/lipgloss/v2 v2.0.0 // indirect
 	cloud.google.com/go v0.123.0 // indirect
-	cloud.google.com/go/auth v0.18.1 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/alecthomas/chroma/v2 v2.23.1 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
@@ -52,7 +53,6 @@ require (
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
-	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect

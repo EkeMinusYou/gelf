@@ -1,27 +1,31 @@
 package config
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
 const DefaultCommitMaxDiffBytes = 100_000
+const DefaultPRMaxDiffBytes = 100_000
 
 type Config struct {
 	ProjectID          string
 	Location           string
 	FlashModel         string
 	ProModel           string
-	BaseFlashModel     string
-	BaseProModel       string
 	CommitLanguage     string
 	CommitModel        string
 	CommitMaxDiffBytes int
 	PRLanguage         string
 	PRTitleLanguage    string
 	PRBodyLanguage     string
+	PRMaxDiffBytes     int
 	PRModel            string
 	Color              string
 }
@@ -43,6 +47,7 @@ type FileConfig struct {
 		MaxDiffBytes int    `yaml:"max_diff_bytes"`
 	} `yaml:"commit"`
 	PR struct {
+		MaxDiffBytes  int    `yaml:"max_diff_bytes"`
 		Model         string `yaml:"model"`
 		Language      string `yaml:"language"`
 		TitleLanguage string `yaml:"title_language"`
@@ -54,7 +59,9 @@ func Load() (*Config, error) {
 	// Load from file first (lowest priority)
 	fileConfig, err := loadFromFile()
 	if err != nil {
-		// File not found or invalid is not an error - use defaults
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
 		fileConfig = &FileConfig{}
 	}
 
@@ -137,33 +144,25 @@ func Load() (*Config, error) {
 		color = "always" // default to always
 	}
 
-	// Resolve actual model names
-	var actualFlashModel string
-	if commitModel == "flash" {
-		actualFlashModel = flashModel
-	} else if commitModel == "pro" {
-		actualFlashModel = proModel
-	} else {
-		// Custom model name
-		actualFlashModel = commitModel
+	cfg := &Config{
+		ProjectID: projectID, Location: location,
+		FlashModel: flashModel, ProModel: proModel,
+		CommitLanguage: commitLanguage, CommitMaxDiffBytes: commitMaxDiffBytes,
+		PRLanguage: prLanguage, PRTitleLanguage: prTitleLanguage, PRBodyLanguage: prBodyLanguage,
+		PRMaxDiffBytes: fileConfig.PR.MaxDiffBytes, Color: color,
 	}
-
-	return &Config{
-		ProjectID:          projectID,
-		Location:           location,
-		FlashModel:         actualFlashModel,
-		ProModel:           proModel,
-		BaseFlashModel:     flashModel,
-		BaseProModel:       proModel,
-		CommitLanguage:     commitLanguage,
-		CommitModel:        commitModel,
-		CommitMaxDiffBytes: commitMaxDiffBytes,
-		PRLanguage:         prLanguage,
-		PRTitleLanguage:    prTitleLanguage,
-		PRBodyLanguage:     prBodyLanguage,
-		PRModel:            prModel,
-		Color:              color,
-	}, nil
+	if cfg.PRMaxDiffBytes <= 0 {
+		cfg.PRMaxDiffBytes = DefaultPRMaxDiffBytes
+	}
+	if fileConfig.Commit.MaxDiffBytes < 0 || fileConfig.PR.MaxDiffBytes < 0 {
+		return nil, fmt.Errorf("max_diff_bytes must not be negative")
+	}
+	if color != "always" && color != "never" && color != "auto" {
+		return nil, fmt.Errorf("invalid color setting %q: expected always, never, or auto", color)
+	}
+	cfg.CommitModel = cfg.ResolveModel(commitModel)
+	cfg.PRModel = cfg.ResolveModel(prModel)
+	return cfg, nil
 }
 
 func loadFromFile() (*FileConfig, error) {
@@ -199,11 +198,14 @@ func loadFromFile() (*FileConfig, error) {
 	for _, path := range configPaths {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			continue // Try next path
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to read configuration %s: %w", path, err)
 		}
 
 		if err := yaml.Unmarshal(data, &config); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("invalid configuration %s: %w", path, err)
 		}
 		return &config, nil
 	}
@@ -211,12 +213,14 @@ func loadFromFile() (*FileConfig, error) {
 	return nil, os.ErrNotExist
 }
 
-func (c *Config) UseColor() bool {
+// UseColor evaluates auto independently for each output stream.
+func (c *Config) UseColor(out io.Writer) bool {
 	switch c.Color {
 	case "never":
 		return false
-	case "always":
-		return true
+	case "auto":
+		f, ok := out.(*os.File)
+		return ok && term.IsTerminal(int(f.Fd())) && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
 	default:
 		return true
 	}
@@ -225,14 +229,8 @@ func (c *Config) UseColor() bool {
 func (c *Config) ResolveModel(name string) string {
 	switch name {
 	case "", "flash":
-		if c.BaseFlashModel != "" {
-			return c.BaseFlashModel
-		}
 		return c.FlashModel
 	case "pro":
-		if c.BaseProModel != "" {
-			return c.BaseProModel
-		}
 		return c.ProModel
 	default:
 		return name
