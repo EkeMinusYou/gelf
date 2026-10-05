@@ -166,12 +166,9 @@ TITLE REQUIREMENTS:
 - Keep it under 72 characters if possible.
 
 BODY REQUIREMENTS:
-- If PR_TEMPLATE is not "NONE", use it as the base text.
-- Preserve headings, lists, checkboxes, and HTML comments from the template.
-- Fill each section with relevant information derived from the commits and diff.
-- Replace placeholder text with concrete details.
-- If testing information is unknown, explicitly say tests were not run.
-- If PR_TEMPLATE is "NONE", use sections: Summary, Changes, Testing.
+- Describe the purpose and key changes concisely, using only information supported by the commits and diff.
+- If PR_TEMPLATE is not "NONE", use it as the base text, preserve its headings, lists, checkboxes, and HTML comments, and replace placeholders with relevant details.
+- If PR_TEMPLATE is "NONE", use headings or bullet points only when they improve clarity; no fixed sections are required.
 
 BASE BRANCH: %s
 HEAD BRANCH: %s
@@ -275,7 +272,7 @@ REVISION REQUIREMENTS:
 - Preserve information and structure that is not affected by the instructions.
 - Keep the title concise (under 72 characters if possible) and in imperative mood.
 - If PR_TEMPLATE is not "NONE", continue to respect its sections, headings, lists, checkboxes, and HTML comments.
-- If PR_TEMPLATE is "NONE", keep using sections such as Summary, Changes, Testing where appropriate.
+- If PR_TEMPLATE is "NONE", describe the purpose and key changes concisely, using headings or bullet points only when they improve clarity; no fixed sections are required.
 - Do not invent information not supported by the commits and diff.
 
 BASE BRANCH: %s

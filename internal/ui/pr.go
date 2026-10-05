@@ -73,7 +73,7 @@ func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
 		case PRChoiceRevise:
 			instructions, ok, err := PromptLineStyled(
 				"💬 Tell me how to revise the pull request:",
-				"e.g. shorten the title and add a Testing section",
+				"e.g. shorten the title and clarify the summary",
 			)
 			if err != nil {
 				return nil, false, err
