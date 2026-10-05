@@ -145,10 +145,12 @@ Generate pull requests with AI-generated titles and descriptions based on commit
 gelf pr create
 ```
 
+The generated body follows the PR template when available; otherwise, it briefly explains the purpose and key changes, using headings or bullet points when helpful rather than fixed sections.
+
 After the PR title and description are generated, the interactive prompt lets you:
 
 - Press `y` to create the pull request with the generated content
-- Press `r` to enter chat-style revision instructions (e.g. "shorten the title", "add a Testing section in Japanese"). gelf re-generates the title/body using your feedback and asks again — repeat as many times as you like.
+- Press `r` to enter chat-style revision instructions (e.g. "shorten the title", "clarify the summary in Japanese"). gelf re-generates the title/body using your feedback and asks again — repeat as many times as you like.
 - Press `n` (or `Esc` / `q`) to cancel without creating a PR
 
 Options:

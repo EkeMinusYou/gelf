@@ -496,33 +496,6 @@ func isNonFastForwardError(output string) bool {
 		strings.Contains(lower, "branch tip is behind its remote")
 }
 
-func runCommandWithSpinner(cmd *exec.Cmd, message string, stdout, stderr io.Writer) error {
-	if stdout == nil {
-		stdout = io.Discard
-	}
-	if stderr == nil {
-		stderr = io.Discard
-	}
-
-	var outBuf bytes.Buffer
-	var errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-
-	stopSpinner := ui.StartSpinner(message, stderr)
-	err := cmd.Run()
-	stopSpinner()
-
-	if outBuf.Len() > 0 {
-		fmt.Fprint(stdout, outBuf.String())
-	}
-	if errBuf.Len() > 0 {
-		fmt.Fprint(stderr, errBuf.String())
-	}
-
-	return err
-}
-
 func runCommandWithSpinnerCapture(cmd *exec.Cmd, message string, stderr io.Writer) (string, string, error) {
 	if stderr == nil {
 		stderr = io.Discard
