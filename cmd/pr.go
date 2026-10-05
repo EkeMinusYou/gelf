@@ -1,14 +1,8 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"net/url"
-	"os/exec"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
@@ -19,517 +13,305 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var prCmd = &cobra.Command{
-	Use:   "pr",
-	Short: "Manage pull requests",
+type prOptions struct {
+	Draft, DryRun, Render, NoRender, Yes, Update bool
+	Model, Language, TitleLanguage, BodyLanguage string
 }
 
-var prCreateCmd = &cobra.Command{
-	Use:   "create",
-	Short: "Create a pull request with AI-generated title and description",
-	RunE:  runPRCreate,
+func newPRCommand(deps dependencies) *cobra.Command {
+	var opts prOptions
+	parent := &cobra.Command{Use: "pr", Short: "Manage pull requests"}
+	cmd := &cobra.Command{Use: "create", Short: "Create a pull request with AI-generated title and description", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error { return runPRCreate(cmd, opts, deps) },
+	}
+	cmd.Flags().BoolVar(&opts.Draft, "draft", false, "Create the pull request as a draft")
+	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Print generated content without pushing or creating a pull request (fetches required refs)")
+	cmd.Flags().BoolVar(&opts.Render, "render", true, "Render pull request markdown body")
+	cmd.Flags().BoolVar(&opts.NoRender, "no-render", false, "Disable markdown rendering")
+	cmd.Flags().BoolVar(&opts.Yes, "yes", false, "Approve normal push and PR creation (force push still requires confirmation)")
+	cmd.Flags().BoolVar(&opts.Update, "update", false, "Update the matching open pull request, or create one if none exists")
+	cmd.Flags().StringVar(&opts.Model, "model", "", "Override default model for PR generation")
+	cmd.Flags().StringVar(&opts.Language, "language", "", "Language for PR generation")
+	cmd.Flags().StringVar(&opts.TitleLanguage, "title-language", "", "Language for PR title")
+	cmd.Flags().StringVar(&opts.BodyLanguage, "body-language", "", "Language for PR body")
+	parent.AddCommand(cmd)
+	return parent
 }
 
-var (
-	prDraft         bool
-	prDryRun        bool
-	prModel         string
-	prLanguage      string
-	prTitleLanguage string
-	prBodyLanguage  string
-	prRender        bool
-	prNoRender      bool
-	prYes           bool
-	prUpdate        bool
-)
-
-func init() {
-	prCreateCmd.Flags().BoolVar(&prDraft, "draft", false, "Create the pull request as a draft")
-	prCreateCmd.Flags().BoolVar(&prDryRun, "dry-run", false, "Print the generated title and body without creating a pull request")
-	prCreateCmd.Flags().StringVar(&prModel, "model", "", "Override default model for PR generation")
-	prCreateCmd.Flags().StringVar(&prLanguage, "language", "", "Language for PR generation (e.g., english, japanese)")
-	prCreateCmd.Flags().StringVar(&prTitleLanguage, "title-language", "", "Language for PR title (e.g., english, japanese)")
-	prCreateCmd.Flags().StringVar(&prBodyLanguage, "body-language", "", "Language for PR body (e.g., english, japanese)")
-	prCreateCmd.Flags().BoolVar(&prRender, "render", true, "Render pull request markdown body")
-	prCreateCmd.Flags().BoolVar(&prNoRender, "no-render", false, "Disable markdown rendering in dry-run output")
-	prCreateCmd.Flags().BoolVar(&prYes, "yes", false, "Automatically approve PR creation without confirmation")
-	prCreateCmd.Flags().BoolVar(&prUpdate, "update", false, "Update existing pull request when one already exists")
-
-	prCmd.AddCommand(prCreateCmd)
+type prContext struct {
+	Base, Head github.RepoInfo
+	BaseBranch string
+	Target     git.PushTarget
+	Status     git.PushStatus
+	Existing   *github.PullRequestInfo
+	GitHub     *github.Client
+	Input      ai.PullRequestInput
+	Summary    git.DiffSummary
+	Template   *github.PullRequestTemplate
 }
 
-func runPRCreate(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
-
-	cfg, err := config.Load()
+func runPRCreate(cmd *cobra.Command, opts prOptions, deps dependencies) error {
+	ctx := cmd.Context()
+	cfg, err := deps.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
-
-	// Override language settings from command line flags
-	if prLanguage != "" {
-		cfg.PRLanguage = prLanguage
-		cfg.PRTitleLanguage = prLanguage
-		cfg.PRBodyLanguage = prLanguage
-	}
-	if prTitleLanguage != "" {
-		cfg.PRTitleLanguage = prTitleLanguage
-	}
-	if prBodyLanguage != "" {
-		cfg.PRBodyLanguage = prBodyLanguage
-	}
-
-	if prNoRender {
-		prRender = false
-	}
-
-	if !cfg.UseColor() {
-		ui.DisableColor()
-	}
-
-	modelToUse := cfg.PRModel
-	if prModel != "" {
-		modelToUse = prModel
-	}
-	cfg.FlashModel = cfg.ResolveModel(modelToUse)
-
-	currentRepo, parentRepo, err := github.RepoInfoFromGHWithParent(ctx)
+	session := ui.NewSession(ctx, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg.UseColor(cmd.OutOrStdout()), cfg.UseColor(cmd.ErrOrStderr()))
+	opts.Render = opts.Render && !opts.NoRender
+	pr, err := resolvePR(ctx, deps)
 	if err != nil {
 		return err
 	}
-
-	headBranch, err := git.GetCurrentBranch()
-	if err != nil {
-		return fmt.Errorf("failed to determine current branch: %w", err)
-	}
-
-	baseRepo := currentRepo
-	if parentRepo != nil {
-		baseRepo = parentRepo
-	}
-
-	repoFullName := fmt.Sprintf("%s/%s", baseRepo.Owner, baseRepo.Name)
-	headOwners := make([]string, 0, 2)
-	status, err := git.GetPushStatus(headBranch)
-	if err != nil {
-		return fmt.Errorf("failed to determine upstream status: %w", err)
-	}
-
-	remoteName := status.RemoteName
-	if remoteName == "" {
-		remoteName = "origin"
-	}
-
-	if remoteURL, err := git.GetRemoteURL(remoteName); err == nil {
-		if remoteRepoInfo, err := github.RepoInfoFromRemoteURL(remoteURL); err == nil && remoteRepoInfo != nil {
-			headOwners = append(headOwners, remoteRepoInfo.Owner)
-		}
-	}
-	if currentRepo.Owner != "" {
-		alreadyAdded := false
-		for _, owner := range headOwners {
-			if owner == currentRepo.Owner {
-				alreadyAdded = true
-				break
-			}
-		}
-		if !alreadyAdded {
-			headOwners = append(headOwners, currentRepo.Owner)
-		}
-	}
-	if baseRepo.Owner != "" {
-		alreadyAdded := false
-		for _, owner := range headOwners {
-			if owner == baseRepo.Owner {
-				alreadyAdded = true
-				break
-			}
-		}
-		if !alreadyAdded {
-			headOwners = append(headOwners, baseRepo.Owner)
-		}
-	}
-
-	existingPR, err := github.FindPullRequest(ctx, repoFullName, headBranch, headOwners)
-	if err != nil {
-		return err
-	}
-
-	updateExisting := existingPR != nil && prUpdate
-	if existingPR != nil && !prUpdate {
-		stateLabel := existingPR.State
-		if existingPR.IsDraft {
-			stateLabel = "DRAFT"
-		}
-		fmt.Fprintf(cmd.ErrOrStderr(), "Pull request already exists for branch %s (%s): #%d %s (%s)\n", headBranch, stateLabel, existingPR.Number, existingPR.Title, existingPR.URL)
+	if pr.Existing != nil && !opts.Update {
+		fmt.Fprintf(session.Err, "Pull request already exists for %s:%s: #%d %s (%s)\n", pr.Head.FullName(), pr.Target.Branch, pr.Existing.Number, pr.Existing.Title, pr.Existing.URL)
 		return nil
 	}
-
-	token, err := github.AuthToken(ctx)
-	if err != nil {
+	opts.Update = opts.Update && pr.Existing != nil
+	if err := preparePR(ctx, deps, pr, cfg, opts, session); err != nil {
 		return err
 	}
-
-	repoRoot, err := git.GetRepoRoot()
-	if err != nil {
-		return err
-	}
-
-	template, err := github.FindPullRequestTemplate(ctx, repoRoot, token, baseRepo.Owner)
-	if err != nil {
-		return fmt.Errorf("failed to resolve pull request template: %w", err)
-	}
-
-	baseBranch, err := git.GetDefaultBaseBranch()
-	if err != nil {
-		return fmt.Errorf("failed to determine base branch: %w", err)
-	}
-
-	// When updating, use the existing PR's base branch to avoid including
-	// unrelated commits from a non-default base branch in the diff.
-	if updateExisting && existingPR.Base != "" {
-		baseBranch = existingPR.Base
-	}
-
-	if !prDryRun {
-		shouldContinue, err := ensureBranchPushed(cmd, headBranch)
+	if !opts.DryRun {
+		confirmed, err := ensureBranchPushed(ctx, deps.Git, pr.Status, opts.Yes, session)
 		if err != nil {
 			return err
 		}
-		if !shouldContinue {
+		if !confirmed {
 			return nil
 		}
 	}
-
-	baseRef := "origin/" + baseBranch
-	commitLog, err := git.GetCommitLog(baseRef, "HEAD")
-	if err != nil {
-		return fmt.Errorf("failed to get commit log: %w", err)
+	model := cfg.PRModel
+	if opts.Model != "" {
+		model = cfg.ResolveModel(opts.Model)
 	}
-	if commitLog == "" {
-		return fmt.Errorf("no commits found between %s and %s", baseRef, headBranch)
-	}
-
-	diffStat, err := git.GetCommittedDiffStat(baseRef, "HEAD")
-	if err != nil {
-		return fmt.Errorf("failed to get diff stat: %w", err)
-	}
-
-	diff, err := git.GetCommittedDiff(baseRef, "HEAD")
-	if err != nil {
-		return fmt.Errorf("failed to get diff: %w", err)
-	}
-	if diff == "" {
-		return fmt.Errorf("no committed changes found between %s and %s", baseRef, headBranch)
-	}
-
-	aiClient, err := ai.NewVertexAIClient(ctx, cfg)
+	client, err := deps.NewAI(ctx, cfg, model)
 	if err != nil {
 		return fmt.Errorf("failed to create AI client: %w", err)
 	}
-
-	templateContent := ""
-	templatePath := ""
-	templateSource := ""
-	if template != nil {
-		templateContent = template.Content
-		templatePath = template.Path
-		templateSource = template.Source
+	content, confirmed, err := generatePR(client, pr, opts, session)
+	if err != nil || !confirmed || opts.DryRun {
+		return err
 	}
+	return publishPR(ctx, pr, content, opts, session)
+}
 
-	if prDryRun {
-		prContent, err := aiClient.GeneratePullRequestContent(ctx, ai.PullRequestInput{
-			BaseBranch:    baseBranch,
-			HeadBranch:    headBranch,
-			CommitLog:     commitLog,
-			DiffStat:      diffStat,
-			Diff:          diff,
-			Template:      templateContent,
-			Language:      cfg.PRLanguage,
-			TitleLanguage: cfg.PRTitleLanguage,
-			BodyLanguage:  cfg.PRBodyLanguage,
-		})
-		if err != nil {
-			return err
-		}
-
-		if templateContent != "" {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Using %s template: %s\n", templateSource, templatePath)
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Title:\n%s\n\n", prContent.Title)
-		if prRender {
-			fmt.Fprintf(cmd.OutOrStdout(), "Body:\n")
-			rendered, err := ui.RenderMarkdown(prContent.Body, cfg.UseColor())
-			if err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Failed to render markdown: %v\n", err)
-				fmt.Fprintf(cmd.OutOrStdout(), "%s\n", prContent.Body)
-				return nil
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", rendered)
-		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "Body:\n%s\n", prContent.Body)
-		}
-		return nil
-	}
-
-	var prContent *ai.PullRequestContent
-	if prYes {
-		prContent, err = aiClient.GeneratePullRequestContent(ctx, ai.PullRequestInput{
-			BaseBranch:    baseBranch,
-			HeadBranch:    headBranch,
-			CommitLog:     commitLog,
-			DiffStat:      diffStat,
-			Diff:          diff,
-			Template:      templateContent,
-			Language:      cfg.PRLanguage,
-			TitleLanguage: cfg.PRTitleLanguage,
-			BodyLanguage:  cfg.PRBodyLanguage,
-		})
-		if err != nil {
-			return err
-		}
-	} else {
-		confirmPrompt := "Create this pull request? (y)es / (r)evise / (n)o"
-		if updateExisting {
-			confirmPrompt = "Update this pull request? (y)es / (r)evise / (n)o"
-		}
-		prTUI := ui.NewPRTUI(aiClient, ai.PullRequestInput{
-			BaseBranch:    baseBranch,
-			HeadBranch:    headBranch,
-			CommitLog:     commitLog,
-			DiffStat:      diffStat,
-			Diff:          diff,
-			Template:      templateContent,
-			Language:      cfg.PRLanguage,
-			TitleLanguage: cfg.PRTitleLanguage,
-			BodyLanguage:  cfg.PRBodyLanguage,
-		}, prRender, cfg.UseColor(), confirmPrompt)
-
-		content, confirmed, err := prTUI.Run()
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			return nil
-		}
-		prContent = content
-	}
-
-	if updateExisting {
-		ghArgs := []string{"pr", "edit", fmt.Sprintf("%d", existingPR.Number), "--title", prContent.Title, "--body-file", "-"}
-
-		ghCmd := exec.Command("gh", ghArgs...)
-		ghCmd.Stdin = strings.NewReader(prContent.Body)
-		ghOut, ghErr, err := runCommandWithSpinnerCapture(ghCmd, "Updating pull request...", cmd.ErrOrStderr())
-		if err != nil {
-			if strings.TrimSpace(ghOut) != "" {
-				fmt.Fprint(cmd.OutOrStdout(), ghOut)
-			}
-			if strings.TrimSpace(ghErr) != "" {
-				fmt.Fprint(cmd.ErrOrStderr(), ghErr)
-			}
-			return fmt.Errorf("failed to update pull request: %w", err)
-		}
-		suffix := ""
-		if existingPR.Number > 0 {
-			suffix = fmt.Sprintf("(#%d)", existingPR.Number)
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderPRSuccess("✓ Pull request updated", prContent.Title, suffix, existingPR.URL))
-		return nil
-	}
-
-	ghArgs := []string{"pr", "create", "--title", prContent.Title, "--body-file", "-", "--base", baseBranch}
-	if prDraft {
-		ghArgs = append(ghArgs, "--draft")
-	}
-
-	ghCmd := exec.Command("gh", ghArgs...)
-	ghCmd.Stdin = strings.NewReader(prContent.Body)
-	ghOut, ghErr, err := runCommandWithSpinnerCapture(ghCmd, "Creating pull request...", cmd.ErrOrStderr())
+func resolvePR(ctx context.Context, deps dependencies) (*prContext, error) {
+	current, parent, err := deps.GitHub.Repo(ctx, "")
 	if err != nil {
-		if strings.TrimSpace(ghOut) != "" {
-			fmt.Fprint(cmd.OutOrStdout(), ghOut)
-		}
-		if strings.TrimSpace(ghErr) != "" {
-			fmt.Fprint(cmd.ErrOrStderr(), ghErr)
-		}
-		return fmt.Errorf("failed to create pull request: %w", err)
+		return nil, err
 	}
+	base := current
+	if parent != nil {
+		base = parent
+	}
+	if base.DefaultBranch == "" {
+		base, _, err = deps.GitHub.Repo(ctx, base.GHName())
+		if err != nil {
+			return nil, err
+		}
+	}
+	if base.DefaultBranch == "" {
+		return nil, fmt.Errorf("base repository has no default branch")
+	}
+	branch, err := deps.Git.CurrentBranch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	target, err := deps.Git.PushTarget(ctx, branch)
+	if err != nil {
+		return nil, err
+	}
+	pushURL, err := deps.Git.RemoteURL(ctx, target.RemoteName, true)
+	if err != nil {
+		return nil, err
+	}
+	head, err := github.RepoInfoFromRemoteURL(pushURL)
+	if err != nil {
+		return nil, err
+	}
+	gh := *deps.GitHub
+	gh.Host = base.Host
+	existing, err := gh.FindPullRequest(ctx, *base, *head, target.Branch)
+	if err != nil {
+		return nil, err
+	}
+	baseBranch := base.DefaultBranch
+	if existing != nil {
+		baseBranch = existing.Base.Ref
+	}
+	return &prContext{Base: *base, Head: *head, BaseBranch: baseBranch, Target: target, Existing: existing, GitHub: &gh}, nil
+}
 
-	ghOutTrim := strings.TrimSpace(ghOut)
-	ghErrTrim := strings.TrimSpace(ghErr)
-	combinedOutput := strings.TrimSpace(strings.Join([]string{ghOutTrim, ghErrTrim}, "\n"))
-	prURL := extractFirstURL(combinedOutput)
-	if prURL == "" {
-		if ghOutTrim != "" {
-			fmt.Fprint(cmd.OutOrStdout(), ghOut)
-		}
-		if ghErrTrim != "" {
-			fmt.Fprint(cmd.ErrOrStderr(), ghErr)
-		}
-		return nil
+func preparePR(ctx context.Context, deps dependencies, pr *prContext, cfg *config.Config, opts prOptions, session *ui.Session) error {
+	remote, err := baseRemote(ctx, deps.Git, pr.Base)
+	if err != nil {
+		return err
 	}
-
-	if ghErrTrim != "" {
-		errWithoutURL := strings.TrimSpace(strings.ReplaceAll(ghErrTrim, prURL, ""))
-		if errWithoutURL != "" {
-			fmt.Fprint(cmd.ErrOrStderr(), errWithoutURL)
-		}
+	baseSHA, err := deps.Git.FetchBase(ctx, remote, pr.BaseBranch)
+	if err != nil {
+		return err
 	}
-
-	prNumber := pullNumberFromURL(prURL)
-	var suffixParts []string
-	if prNumber != "" {
-		suffixParts = append(suffixParts, fmt.Sprintf("(#%s)", prNumber))
+	pr.Status, err = deps.Git.PushStatus(ctx, pr.Target)
+	if err != nil {
+		return err
 	}
-	if prDraft {
-		suffixParts = append(suffixParts, "(draft)")
+	headSHA := pr.Status.HeadSHA
+	log, err := deps.Git.CommitLog(ctx, baseSHA, headSHA)
+	if err != nil {
+		return fmt.Errorf("failed to get commit log: %w", err)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.RenderPRSuccess("✓ Pull request created", prContent.Title, strings.Join(suffixParts, " "), prURL))
-
+	if log == "" {
+		return fmt.Errorf("no commits found between %s and %s", pr.BaseBranch, pr.Target.Branch)
+	}
+	stat, err := deps.Git.CommittedDiffStat(ctx, baseSHA, headSHA)
+	if err != nil {
+		return err
+	}
+	diff, err := deps.Git.CommittedDiff(ctx, baseSHA, headSHA)
+	if err != nil {
+		return err
+	}
+	if diff == "" {
+		return fmt.Errorf("no committed changes found between %s and %s", pr.BaseBranch, pr.Target.Branch)
+	}
+	pr.Summary, err = deps.Git.CommittedSummary(ctx, baseSHA, headSHA)
+	if err != nil {
+		return err
+	}
+	root, err := deps.Git.Root(ctx)
+	if err != nil {
+		return err
+	}
+	pr.Template, err = pr.GitHub.FindPullRequestTemplate(ctx, root, pr.Base.Owner)
+	if err != nil {
+		return fmt.Errorf("failed to resolve pull request template: %w", err)
+	}
+	template := ""
+	if pr.Template != nil {
+		template = pr.Template.Content
+	}
+	titleLanguage, bodyLanguage := cfg.PRTitleLanguage, cfg.PRBodyLanguage
+	if opts.Language != "" {
+		titleLanguage, bodyLanguage = opts.Language, opts.Language
+	}
+	if opts.TitleLanguage != "" {
+		titleLanguage = opts.TitleLanguage
+	}
+	if opts.BodyLanguage != "" {
+		bodyLanguage = opts.BodyLanguage
+	}
+	pr.Input = ai.PullRequestInput{
+		BaseBranch: pr.BaseBranch, HeadBranch: pr.Target.Branch, CommitLog: log, DiffStat: stat,
+		Diff: limitDiffWithWarning(diff, cfg.PRMaxDiffBytes, "PR", session), Template: template,
+		Language: cfg.PRLanguage, TitleLanguage: titleLanguage, BodyLanguage: bodyLanguage,
+	}
 	return nil
 }
 
-func ensureBranchPushed(cmd *cobra.Command, branch string) (bool, error) {
-	status, err := git.GetPushStatus(branch)
+func baseRemote(ctx context.Context, repo *git.Repository, base github.RepoInfo) (string, error) {
+	remotes, err := repo.Remotes(ctx)
 	if err != nil {
-		return false, fmt.Errorf("failed to check if branch is pushed: %w", err)
+		return "", err
 	}
-	if status.HeadPushed {
+	for _, remote := range remotes {
+		remoteURL, err := repo.RemoteURL(ctx, remote, false)
+		if err != nil {
+			return "", err
+		}
+		info, err := github.RepoInfoFromRemoteURL(remoteURL)
+		if err == nil && info.Equal(base) {
+			return remote, nil
+		}
+	}
+	if base.URL == "" {
+		return "", fmt.Errorf("no remote or clone URL found for %s", base.FullName())
+	}
+	return strings.TrimSuffix(base.URL, ".git") + ".git", nil
+}
+
+func ensureBranchPushed(ctx context.Context, repo *git.Repository, status git.PushStatus, yes bool, session *ui.Session) (bool, error) {
+	if status.UpToDate() {
 		return true, nil
 	}
-
-	remoteName := status.RemoteName
-	if remoteName == "" {
-		remoteName = "origin"
+	if status.BehindOnly() {
+		return false, fmt.Errorf("local branch is %d commit(s) behind %s/%s; integrate the remote changes before creating or updating a PR", status.Behind, status.Target.RemoteName, status.Target.Branch)
 	}
-
-	args := []string{"push"}
-	if !status.HasUpstream {
-		args = []string{"push", "-u", remoteName, branch}
-	}
-
-	if status.NeedForcePush {
-		prompt := fmt.Sprintf("Current branch requires force push to %s. Force push now? (y)es / (n)o", remoteName)
-		confirmed, err := ui.PromptYesNoStyledWithWriter(prompt, cmd.ErrOrStderr())
-		if err != nil {
+	force := status.Diverged()
+	if force || !yes {
+		prompt := fmt.Sprintf("Push current branch to %s/%s? (y)es / (n)o", status.Target.RemoteName, status.Target.Branch)
+		if force {
+			prompt = fmt.Sprintf("Branch history has diverged (%d ahead, %d behind). Force push with lease to %s/%s? (y)es / (n)o", status.Ahead, status.Behind, status.Target.RemoteName, status.Target.Branch)
+		}
+		confirmed, err := session.YesNo(prompt)
+		if err != nil || !confirmed {
 			return false, err
 		}
-		if !confirmed {
-			return false, nil
-		}
-
-		forceArgs := append(append([]string{}, args...), "--force-with-lease")
-		out, err := executePush(forceArgs, "Force pushing branch...", cmd.ErrOrStderr())
-		if err != nil {
-			if out == "" {
-				return false, fmt.Errorf("failed to push branch: %w", err)
-			}
-			return false, fmt.Errorf("failed to push branch: %w\n%s", err, out)
-		}
-
-		fmt.Fprintf(cmd.OutOrStdout(), "%s\n\n", ui.RenderSuccessHeader("✓ Push succeeded"))
-		return true, nil
 	}
-
-	prompt := fmt.Sprintf("Current branch is not pushed to %s. Push now? (y)es / (n)o", remoteName)
-	confirmed, err := ui.PromptYesNoStyledWithWriter(prompt, cmd.ErrOrStderr())
+	message := "Pushing branch..."
+	if force {
+		message = "Force pushing branch..."
+	}
+	stop := session.Spinner(message, true)
+	err := repo.Push(ctx, status, force)
+	stop()
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to push branch; refresh remote status before retrying: %w", err)
 	}
-	if !confirmed {
-		return false, nil
-	}
-
-	out, err := executePush(args, "Pushing branch...", cmd.ErrOrStderr())
-	if err != nil {
-		if isNonFastForwardError(out) {
-			forcePrompt := fmt.Sprintf("Push was rejected (non-fast-forward). Force push to %s? (y)es / (n)o", remoteName)
-			forceConfirmed, promptErr := ui.PromptYesNoStyledWithWriter(forcePrompt, cmd.ErrOrStderr())
-			if promptErr != nil {
-				return false, promptErr
-			}
-			if !forceConfirmed {
-				return false, nil
-			}
-
-			forceArgs := append(append([]string{}, args...), "--force-with-lease")
-			forceOut, forceErr := executePush(forceArgs, "Force pushing branch...", cmd.ErrOrStderr())
-			if forceErr != nil {
-				if forceOut == "" {
-					return false, fmt.Errorf("failed to push branch: %w", forceErr)
-				}
-				return false, fmt.Errorf("failed to push branch: %w\n%s", forceErr, forceOut)
-			}
-
-			fmt.Fprintf(cmd.OutOrStdout(), "%s\n\n", ui.RenderSuccessHeader("✓ Push succeeded"))
-			return true, nil
-		}
-
-		if out == "" {
-			return false, fmt.Errorf("failed to push branch: %w", err)
-		}
-		return false, fmt.Errorf("failed to push branch: %w\n%s", err, out)
-	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "%s\n\n", ui.RenderSuccessHeader("✓ Push succeeded"))
-
+	fmt.Fprintf(session.Out, "%s\n\n", session.Styles.Success.Render("✓ Push succeeded"))
 	return true, nil
 }
 
-func executePush(args []string, message string, stderr io.Writer) (string, error) {
-	pushCmd := exec.Command("git", args...)
-	var pushOutput bytes.Buffer
-	pushCmd.Stdout = &pushOutput
-	pushCmd.Stderr = &pushOutput
-	stopSpinner := ui.StartSpinnerInline(message, stderr)
-	err := pushCmd.Run()
-	stopSpinner()
-	return strings.TrimSpace(pushOutput.String()), err
-}
-
-func isNonFastForwardError(output string) bool {
-	lower := strings.ToLower(output)
-	return strings.Contains(lower, "non-fast-forward") ||
-		strings.Contains(lower, "fetch first") ||
-		strings.Contains(lower, "tip of your current branch is behind") ||
-		strings.Contains(lower, "branch tip is behind its remote")
-}
-
-func runCommandWithSpinnerCapture(cmd *exec.Cmd, message string, stderr io.Writer) (string, string, error) {
-	if stderr == nil {
-		stderr = io.Discard
+func generatePR(client ai.Client, pr *prContext, opts prOptions, session *ui.Session) (*ai.PullRequestContent, bool, error) {
+	if !opts.DryRun && !opts.Yes {
+		prompt := "Create this pull request? (y)es / (r)evise / (n)o"
+		if opts.Update {
+			prompt = "Update this pull request? (y)es / (r)evise / (n)o"
+		}
+		return ui.NewPRTUI(session, client, pr.Input, pr.Summary, opts.Render, prompt).Run()
 	}
-
-	var outBuf bytes.Buffer
-	var errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-
-	stopSpinner := ui.StartSpinner(message, stderr)
-	err := cmd.Run()
-	stopSpinner()
-
-	return outBuf.String(), errBuf.String(), err
-}
-
-func extractFirstURL(output string) string {
-	re := regexp.MustCompile(`https?://\S+`)
-	return re.FindString(output)
-}
-
-func pullNumberFromURL(prURL string) string {
-	parsed, err := url.Parse(prURL)
+	content, err := client.GeneratePullRequestContent(session.Context, pr.Input)
 	if err != nil {
-		return ""
+		return nil, false, err
 	}
-	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-	for i := 0; i+1 < len(segments); i++ {
-		if segments[i] == "pull" || segments[i] == "pulls" {
-			if _, err := strconv.Atoi(segments[i+1]); err == nil {
-				return segments[i+1]
+	if opts.DryRun {
+		if pr.Template != nil {
+			fmt.Fprintf(session.Err, "Using %s template: %s\n", pr.Template.Source, pr.Template.Path)
+		}
+		body := content.Body
+		if opts.Render {
+			rendered, err := ui.RenderMarkdown(body, session.UseColor)
+			if err != nil {
+				fmt.Fprintf(session.Err, "Failed to render markdown: %v\n", err)
+			} else {
+				body = rendered
 			}
 		}
+		fmt.Fprintf(session.Out, "Title:\n%s\n\nBody:\n%s\n", content.Title, body)
 	}
-	return ""
+	return content, true, nil
+}
+
+func publishPR(ctx context.Context, pr *prContext, content *ai.PullRequestContent, opts prOptions, session *ui.Session) error {
+	message, header := "Creating pull request...", "✓ Pull request created"
+	if opts.Update {
+		message, header = "Updating pull request...", "✓ Pull request updated"
+	}
+	stop := session.Spinner(message, false)
+	defer stop()
+	var published *github.PullRequestInfo
+	var err error
+	if opts.Update {
+		published, err = pr.GitHub.Update(ctx, pr.Base, pr.Existing.Number, content)
+	} else {
+		published, err = pr.GitHub.Create(ctx, pr.Base, pr.Head, pr.Target.Branch, pr.BaseBranch, content, opts.Draft)
+	}
+	if err != nil {
+		return err
+	}
+	stop()
+	suffix := fmt.Sprintf("(#%d)", published.Number)
+	if published.IsDraft {
+		suffix += " (draft)"
+	}
+	_, err = fmt.Fprintln(session.Out, session.RenderPRSuccess(header, content.Title, suffix, published.URL))
+	return err
 }

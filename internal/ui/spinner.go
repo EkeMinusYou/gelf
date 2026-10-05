@@ -11,28 +11,20 @@ import (
 	"golang.org/x/term"
 )
 
-// StartSpinner renders a simple loading spinner on the given writer.
-// It returns a stop function that clears the line and prints a newline.
-func StartSpinner(message string, out io.Writer) func() {
-	return startSpinner(message, out, true)
+func (s *Session) Spinner(message string, inline bool) func() {
+	return startSpinner(message, s.Err, !inline, s.ErrStyles)
 }
 
-// StartSpinnerInline renders a simple loading spinner on the given writer.
-// It returns a stop function that clears the line without printing a newline.
-func StartSpinnerInline(message string, out io.Writer) func() {
-	return startSpinner(message, out, false)
-}
-
-func startSpinner(message string, out io.Writer, newline bool) func() {
+func startSpinner(message string, out io.Writer, newline bool, styles Styles) func() {
 	if out == nil {
-		out = os.Stderr
+		out = io.Discard
 	}
 	if !isTerminalWriter(out) {
 		return func() {}
 	}
 
 	frames := spinner.Dot.Frames
-	styled := loadingStyle.Render(message)
+	styled := styles.Loading.Render(message)
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -57,14 +49,17 @@ func startSpinner(message string, out io.Writer, newline bool) func() {
 		}
 	}()
 
+	var once sync.Once
 	return func() {
-		close(done)
-		wg.Wait()
-		if newline {
-			fmt.Fprint(out, "\r\033[2K\n")
-			return
-		}
-		fmt.Fprint(out, "\r\033[2K")
+		once.Do(func() {
+			close(done)
+			wg.Wait()
+			if newline {
+				fmt.Fprint(out, "\r\033[2K\n")
+				return
+			}
+			fmt.Fprint(out, "\r\033[2K")
+		})
 	}
 }
 

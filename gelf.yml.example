@@ -21,9 +21,9 @@ model:
 # Examples: english, japanese, spanish, french, german, chinese, korean
 language: "english"
 
-# Color output settings (default: auto)
+# Color output settings (default: always)
 # Options: auto, always, never
-color: "auto"
+color: "always"
 
 # Commit-specific settings
 commit:
@@ -45,12 +45,19 @@ pr:
   # You can specify separate languages for title and body
   language: "english"
 
+  # Maximum committed diff size sent to the AI in bytes (default: 100000)
+  # Oversized input is truncated with a warning; displayed summaries remain complete.
+  max_diff_bytes: 100000
+
   # Optional: Override language for PR title only (inherits from pr.language if not set)
   # title_language: "english"
 
   # Optional: Override language for PR body only (inherits from pr.language if not set)
   # body_language: "japanese"
 
+# Omitted or zero diff limits use the default; negative values are invalid.
+# Malformed or unreadable configuration files stop the command.
+#
 # Configuration priority (highest to lowest):
 # 1. Environment variables (VERTEXAI_PROJECT, VERTEXAI_LOCATION)
 # 2. This configuration file

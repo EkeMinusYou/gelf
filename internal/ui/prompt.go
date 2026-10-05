@@ -1,15 +1,12 @@
 package ui
 
 import (
-	"bufio"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"golang.org/x/term"
 )
 
 type PRChoice int
@@ -21,44 +18,49 @@ const (
 	PRChoiceNo
 )
 
-func PromptYesNoStyled(prompt string) (bool, error) {
-	return PromptYesNoStyledWithWriter(prompt, os.Stdout)
-}
-
-func PromptYesNo(prompt string) (bool, error) {
-	return PromptYesNoWithWriter(prompt, os.Stdout)
-}
-
-func PromptYesNoStyledWithWriter(prompt string, out io.Writer) (bool, error) {
-	return PromptYesNoWithWriter(promptStyle.Render(prompt), out)
-}
-
-func PromptYesNoWithWriter(prompt string, out io.Writer) (bool, error) {
-	if out == nil {
-		out = os.Stdout
-	}
-	if term.IsTerminal(int(os.Stdin.Fd())) {
+func (s *Session) YesNo(prompt string) (bool, error) {
+	prompt = s.ErrStyles.Prompt.Render(prompt)
+	if s.terminalInput() {
 		m := &yesNoModel{prompt: prompt}
-		p := tea.NewProgram(m, tea.WithOutput(out))
+		p := tea.NewProgram(m, tea.WithContext(s.Context), tea.WithInput(s.In), tea.WithOutput(s.Err))
 		if _, err := p.Run(); err != nil {
 			return false, err
 		}
 		return m.confirmed, nil
 	}
-
-	fmt.Fprintf(out, "%s ", prompt)
-
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
-	if err != nil && err != io.EOF {
+	if _, err := fmt.Fprintf(s.Err, "%s ", prompt); err != nil {
 		return false, err
 	}
-
-	line = strings.TrimSpace(line)
-	if strings.HasPrefix(strings.ToLower(line), "y") {
-		return true, nil
+	line, err := s.readLine()
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	line = strings.ToLower(line)
+	return line == "y" || line == "yes", nil
+}
+
+func (s *Session) readLine() (string, error) {
+	if err := s.Context.Err(); err != nil {
+		return "", err
+	}
+	type result struct {
+		line string
+		err  error
+	}
+	completed := make(chan result, 1)
+	go func() {
+		line, err := s.reader.ReadString('\n')
+		if err == io.EOF {
+			err = nil
+		}
+		completed <- result{line: strings.TrimSpace(line), err: err}
+	}()
+	select {
+	case <-s.Context.Done():
+		return "", s.Context.Err()
+	case read := <-completed:
+		return read.line, read.err
+	}
 }
 
 type yesNoModel struct {
@@ -90,35 +92,24 @@ func (m *yesNoModel) View() string {
 	return fmt.Sprintf("%s ", m.prompt)
 }
 
-// PromptPRChoiceStyled prompts the user to choose between yes / revise / no
-// for the PR creation flow. The prompt is rendered with the standard prompt
-// style.
-func PromptPRChoiceStyled(prompt string) (PRChoice, error) {
-	return promptPRChoiceWithWriter(promptStyle.Render(prompt), os.Stdout)
-}
-
-func promptPRChoiceWithWriter(prompt string, out io.Writer) (PRChoice, error) {
-	if out == nil {
-		out = os.Stdout
-	}
-	if term.IsTerminal(int(os.Stdin.Fd())) {
+func (s *Session) PRChoice(prompt string) (PRChoice, error) {
+	prompt = s.Styles.Prompt.Render(prompt)
+	if s.terminalInput() {
 		m := &prChoiceModel{prompt: prompt}
-		p := tea.NewProgram(m, tea.WithOutput(out))
+		p := tea.NewProgram(m, tea.WithContext(s.Context), tea.WithInput(s.In), tea.WithOutput(s.Out))
 		if _, err := p.Run(); err != nil {
 			return PRChoiceNone, err
 		}
 		return m.choice, nil
 	}
-
-	fmt.Fprintf(out, "%s ", prompt)
-
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
-	if err != nil && err != io.EOF {
+	if _, err := fmt.Fprintf(s.Out, "%s ", prompt); err != nil {
 		return PRChoiceNone, err
 	}
-
-	switch strings.ToLower(strings.TrimSpace(line)) {
+	line, err := s.readLine()
+	if err != nil {
+		return PRChoiceNone, err
+	}
+	switch strings.ToLower(line) {
 	case "y", "yes":
 		return PRChoiceYes, nil
 	case "r", "revise":
@@ -160,50 +151,28 @@ func (m *prChoiceModel) View() string {
 	return fmt.Sprintf("%s ", m.prompt)
 }
 
-// PromptLineStyled prompts the user for a single-line text input. Returns the
-// trimmed entered text. If the user cancels (esc / ctrl+c), the second return
-// value is false.
-func PromptLineStyled(prompt, placeholder string) (string, bool, error) {
-	return promptLineWithWriter(promptStyle.Render(prompt), placeholder, os.Stdout)
-}
-
-func promptLineWithWriter(prompt, placeholder string, out io.Writer) (string, bool, error) {
-	if out == nil {
-		out = os.Stdout
-	}
-	if term.IsTerminal(int(os.Stdin.Fd())) {
+func (s *Session) Line(prompt, placeholder string) (string, bool, error) {
+	prompt = s.Styles.Prompt.Render(prompt)
+	if s.terminalInput() {
 		ti := textinput.New()
-		ti.Placeholder = placeholder
-		ti.CharLimit = 0
-		ti.Width = 80
+		ti.Placeholder, ti.CharLimit, ti.Width = placeholder, 0, 80
 		ti.Focus()
-
-		m := &lineInputModel{prompt: prompt, input: ti}
-		p := tea.NewProgram(m, tea.WithOutput(out))
+		m := &lineInputModel{prompt: prompt, input: ti, styles: s.Styles}
+		p := tea.NewProgram(m, tea.WithContext(s.Context), tea.WithInput(s.In), tea.WithOutput(s.Out))
 		if _, err := p.Run(); err != nil {
 			return "", false, err
 		}
-		if !m.submitted {
-			return "", false, nil
-		}
-		return strings.TrimSpace(m.input.Value()), true, nil
+		return strings.TrimSpace(m.input.Value()), m.submitted, nil
 	}
-
-	fmt.Fprintf(out, "%s ", prompt)
-
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
-	if err != nil && err != io.EOF {
+	if _, err := fmt.Fprintf(s.Out, "%s ", prompt); err != nil {
 		return "", false, err
 	}
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return "", false, nil
-	}
-	return line, true, nil
+	line, err := s.readLine()
+	return line, line != "", err
 }
 
 type lineInputModel struct {
+	styles    Styles
 	prompt    string
 	input     textinput.Model
 	submitted bool
@@ -235,6 +204,6 @@ func (m *lineInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *lineInputModel) View() string {
-	hint := editPromptStyle.Render("(Enter to submit, Esc to cancel)")
+	hint := m.styles.EditPrompt.Render("(Enter to submit, Esc to cancel)")
 	return fmt.Sprintf("%s\n%s\n%s", m.prompt, m.input.View(), hint)
 }

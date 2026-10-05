@@ -4,233 +4,215 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
-	"os/exec"
 	"strings"
+	"time"
+
+	"github.com/EkeMinusYou/gelf/internal/ai"
+	"github.com/EkeMinusYou/gelf/internal/process"
 )
 
+type Client struct {
+	Runner     process.Runner
+	HTTP       *http.Client
+	Host       string
+	APIBaseURL string
+}
+
+func NewClient(runner process.Runner) *Client {
+	return &Client{Runner: runner, HTTP: &http.Client{Timeout: 30 * time.Second}, Host: "github.com"}
+}
+
 type RepoInfo struct {
-	Owner string
-	Name  string
+	Host          string
+	Owner         string
+	Name          string
+	DefaultBranch string
+	URL           string
+}
+
+func (r RepoInfo) FullName() string { return r.Owner + "/" + r.Name }
+func (r RepoInfo) GHName() string   { return r.Host + "/" + r.FullName() }
+func (r RepoInfo) Equal(other RepoInfo) bool {
+	return strings.EqualFold(r.Host, other.Host) && strings.EqualFold(r.FullName(), other.FullName())
 }
 
 type PullRequestInfo struct {
 	Number  int    `json:"number"`
 	Title   string `json:"title"`
-	URL     string `json:"url"`
+	URL     string `json:"html_url"`
 	State   string `json:"state"`
-	IsDraft bool   `json:"isDraft"`
-	Base    string `json:"base"`
+	IsDraft bool   `json:"draft"`
+	Head    struct {
+		Ref  string `json:"ref"`
+		Repo *struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
+	} `json:"head"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
 }
 
-type pullRequestListItem struct {
-	Number  int    `json:"number"`
-	Title   string `json:"title"`
-	URL     string `json:"url"`
-	State   string `json:"state"`
-	IsDraft bool   `json:"isDraft"`
-
-	HeadRefName         string `json:"headRefName"`
-	BaseRefName         string `json:"baseRefName"`
-	HeadRepositoryOwner struct {
-		Login string `json:"login"`
-	} `json:"headRepositoryOwner"`
-}
-
-func AuthToken(ctx context.Context) (string, error) {
-	cmd := exec.CommandContext(ctx, "gh", "auth", "token")
-	output, err := cmd.Output()
+func (c *Client) AuthToken(ctx context.Context) (string, error) {
+	result, err := c.Runner.Run(ctx, "gh", []string{"auth", "token", "--hostname", c.Host}, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to get GitHub auth token: %w", err)
+		return "", err
 	}
-
-	token := strings.TrimSpace(string(output))
+	token := strings.TrimSpace(result.Stdout)
 	if token == "" {
 		return "", fmt.Errorf("gh auth token returned empty output")
 	}
-
 	return token, nil
 }
 
-func RepoInfoFromGH(ctx context.Context) (*RepoInfo, error) {
-	current, parent, err := RepoInfoFromGHWithParent(ctx)
+func (c *Client) Repo(ctx context.Context, name string) (*RepoInfo, *RepoInfo, error) {
+	args := []string{"repo", "view"}
+	if name != "" {
+		args = append(args, name)
+	}
+	args = append(args, "--json", "owner,name,parent,defaultBranchRef,url")
+	result, err := c.Runner.Run(ctx, "gh", args, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if parent != nil {
-		return parent, nil
-	}
-	return current, nil
-}
-
-func RepoInfoFromGHWithParent(ctx context.Context) (*RepoInfo, *RepoInfo, error) {
-	cmd := exec.CommandContext(ctx, "gh", "repo", "view", "--json", "owner,name,parent")
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get repository info: %w", err)
-	}
-
-	var result struct {
+	type repoJSON struct {
 		Owner struct {
 			Login string `json:"login"`
 		} `json:"owner"`
-		Name   string `json:"name"`
-		Parent *struct {
-			Owner struct {
-				Login string `json:"login"`
-			} `json:"owner"`
+		Name             string `json:"name"`
+		URL              string `json:"url"`
+		DefaultBranchRef *struct {
 			Name string `json:"name"`
-		} `json:"parent"`
+		} `json:"defaultBranchRef"`
 	}
-
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, nil, fmt.Errorf("failed to parse repository info: %w", err)
+	var data struct {
+		repoJSON
+		Parent *repoJSON `json:"parent"`
 	}
-
-	if result.Owner.Login == "" || result.Name == "" {
-		return nil, nil, fmt.Errorf("repository info is incomplete")
+	if err := json.Unmarshal([]byte(result.Stdout), &data); err != nil {
+		return nil, nil, err
 	}
-
-	current := &RepoInfo{
-		Owner: result.Owner.Login,
-		Name:  result.Name,
-	}
-
-	if result.Parent != nil && result.Parent.Owner.Login != "" && result.Parent.Name != "" {
-		parent := &RepoInfo{
-			Owner: result.Parent.Owner.Login,
-			Name:  result.Parent.Name,
+	host := c.Host
+	convert := func(data repoJSON) (*RepoInfo, error) {
+		if data.Owner.Login == "" || data.Name == "" {
+			return nil, fmt.Errorf("repository info is incomplete")
 		}
-		return current, parent, nil
-	}
-
-	return current, nil, nil
-}
-
-func FindPullRequest(ctx context.Context, repoFullName, headBranch string, headOwners []string) (*PullRequestInfo, error) {
-	headBranch = strings.TrimSpace(headBranch)
-	if headBranch == "" {
-		return nil, fmt.Errorf("head branch is empty")
-	}
-
-	owners := normalizeOwners(headOwners)
-
-	listByHead := func(head string, limit int) ([]pullRequestListItem, error) {
-		args := []string{"pr", "list", "--state", "all", "--json", "number,title,url,state,isDraft,headRefName,baseRefName,headRepositoryOwner", "--limit", fmt.Sprintf("%d", limit), "--head", head}
-		if strings.TrimSpace(repoFullName) != "" {
-			args = append(args, "--repo", repoFullName)
+		// gh's parent field contains owner/name but does not include URL or branch data.
+		if data.URL == "" {
+			data.URL = "https://" + host + "/" + data.Owner.Login + "/" + data.Name
 		}
-
-		cmd := exec.CommandContext(ctx, "gh", args...)
-		output, err := cmd.Output()
-		if err != nil {
-			return nil, fmt.Errorf("failed to list pull requests: %w", err)
-		}
-
-		var prs []pullRequestListItem
-		if err := json.Unmarshal(output, &prs); err != nil {
-			return nil, fmt.Errorf("failed to parse pull request list: %w", err)
-		}
-		return prs, nil
-	}
-
-	selectMatch := func(prs []pullRequestListItem, owner string) *PullRequestInfo {
-		owner = strings.ToLower(strings.TrimSpace(owner))
-		for _, pr := range prs {
-			if strings.TrimSpace(pr.HeadRefName) != headBranch {
-				continue
-			}
-			login := strings.ToLower(strings.TrimSpace(pr.HeadRepositoryOwner.Login))
-			if owner != "" && login != owner {
-				continue
-			}
-			if owner == "" && len(owners) > 0 && login != "" {
-				if _, ok := owners[login]; !ok {
-					continue
-				}
-			}
-			return &PullRequestInfo{
-				Number:  pr.Number,
-				Title:   pr.Title,
-				URL:     pr.URL,
-				State:   pr.State,
-				IsDraft: pr.IsDraft,
-				Base:    pr.BaseRefName,
-			}
-		}
-		return nil
-	}
-
-	for owner := range owners {
-		head := fmt.Sprintf("%s:%s", owner, headBranch)
-		prs, err := listByHead(head, 5)
+		info, err := RepoInfoFromRemoteURL(data.URL)
 		if err != nil {
 			return nil, err
 		}
-		if match := selectMatch(prs, owner); match != nil {
-			return match, nil
+		info.Owner, info.Name = data.Owner.Login, data.Name
+		if data.DefaultBranchRef != nil {
+			info.DefaultBranch = data.DefaultBranchRef.Name
 		}
+		info.URL = data.URL
+		return info, nil
 	}
+	current, err := convert(data.repoJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	if data.Parent == nil {
+		return current, nil, nil
+	}
+	host = current.Host
+	parent, err := convert(*data.Parent)
+	return current, parent, err
+}
 
-	prs, err := listByHead(headBranch, 20)
+func (c *Client) FindPullRequest(ctx context.Context, base, head RepoInfo, branch string) (*PullRequestInfo, error) {
+	if base.Host != head.Host {
+		return nil, fmt.Errorf("base and head repositories must use the same GitHub host")
+	}
+	query := url.Values{"state": {"open"}, "head": {head.Owner + ":" + branch}, "per_page": {"100"}}
+	endpoint := "repos/" + base.FullName() + "/pulls?" + query.Encode()
+	result, err := c.Runner.Run(ctx, "gh", []string{"api", "--hostname", base.Host, "--paginate", "--slurp", endpoint}, nil)
 	if err != nil {
 		return nil, err
 	}
-	if match := selectMatch(prs, ""); match != nil {
-		return match, nil
+	var pages [][]PullRequestInfo
+	if err := json.Unmarshal([]byte(result.Stdout), &pages); err != nil {
+		return nil, fmt.Errorf("failed to parse pull request list: %w", err)
 	}
-
-	return nil, nil
+	var match *PullRequestInfo
+	for _, page := range pages {
+		for _, pr := range page {
+			if pr.State != "open" || pr.Head.Ref != branch || pr.Head.Repo == nil || !strings.EqualFold(pr.Head.Repo.FullName, head.FullName()) {
+				continue
+			}
+			if match != nil {
+				return nil, fmt.Errorf("multiple open PRs match %s:%s; resolve the ambiguity before creating or updating", head.FullName(), branch)
+			}
+			copy := pr
+			match = &copy
+		}
+	}
+	return match, nil
 }
 
-func normalizeOwners(headOwners []string) map[string]struct{} {
-	owners := make(map[string]struct{}, len(headOwners))
-	for _, owner := range headOwners {
-		owner = strings.ToLower(strings.TrimSpace(owner))
-		if owner == "" {
-			continue
-		}
-		owners[owner] = struct{}{}
+// Create uses the REST API so organization-owned forks and head_repo are explicit.
+func (c *Client) Create(ctx context.Context, base, head RepoInfo, branch, baseBranch string, content *ai.PullRequestContent, draft bool) (*PullRequestInfo, error) {
+	payload := map[string]any{"title": content.Title, "body": content.Body, "head": head.Owner + ":" + branch, "base": baseBranch, "draft": draft, "maintainer_can_modify": true}
+	if !base.Equal(head) {
+		payload["head_repo"] = head.Name
 	}
-	return owners
+	return c.writePR(ctx, base, "POST", "repos/"+base.FullName()+"/pulls", payload)
+}
+
+func (c *Client) Update(ctx context.Context, base RepoInfo, number int, content *ai.PullRequestContent) (*PullRequestInfo, error) {
+	return c.writePR(ctx, base, "PATCH", fmt.Sprintf("repos/%s/pulls/%d", base.FullName(), number), map[string]any{"title": content.Title, "body": content.Body})
+}
+
+func (c *Client) writePR(ctx context.Context, base RepoInfo, method, endpoint string, payload map[string]any) (*PullRequestInfo, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"api", "--hostname", base.Host, "--method", method, "--input", "-", "--header", "Accept: application/vnd.github+json", endpoint}
+	result, err := c.Runner.Run(ctx, "gh", args, strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	var pr PullRequestInfo
+	if err := json.Unmarshal([]byte(result.Stdout), &pr); err != nil {
+		return nil, fmt.Errorf("failed to parse PR publication response: %w", err)
+	}
+	if pr.Number <= 0 {
+		return nil, fmt.Errorf("PR publication response has no pull request number")
+	}
+	if pr.URL == "" {
+		pr.URL = fmt.Sprintf("https://%s/%s/pull/%d", base.Host, base.FullName(), pr.Number)
+	}
+	return &pr, nil
 }
 
 func RepoInfoFromRemoteURL(remoteURL string) (*RepoInfo, error) {
 	remoteURL = strings.TrimSpace(remoteURL)
-	if remoteURL == "" {
-		return nil, nil
-	}
-
+	var host, path string
 	if strings.Contains(remoteURL, "://") {
 		parsed, err := url.Parse(remoteURL)
 		if err != nil {
-			return nil, nil
+			return nil, err
 		}
-		return repoInfoFromPath(parsed.Path), nil
+		host, path = parsed.Hostname(), parsed.Path
+	} else if at := strings.LastIndex(remoteURL, "@"); at >= 0 {
+		if colon := strings.Index(remoteURL[at+1:], ":"); colon >= 0 {
+			host = remoteURL[at+1 : at+1+colon]
+			path = remoteURL[at+2+colon:]
+		}
+	} else if colon := strings.Index(remoteURL, ":"); colon >= 0 {
+		host, path = remoteURL[:colon], remoteURL[colon+1:]
 	}
-
-	if idx := strings.Index(remoteURL, ":"); idx != -1 {
-		return repoInfoFromPath(remoteURL[idx+1:]), nil
-	}
-
-	return nil, nil
-}
-
-func repoInfoFromPath(path string) *RepoInfo {
-	path = strings.TrimPrefix(path, "/")
-	path = strings.TrimSuffix(path, ".git")
+	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
 	parts := strings.Split(path, "/")
-	if len(parts) < 2 {
-		return nil
+	if host == "" || len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return nil, fmt.Errorf("unsupported GitHub remote URL %q", remoteURL)
 	}
-	owner := strings.TrimSpace(parts[0])
-	repo := strings.TrimSpace(parts[1])
-	if owner == "" || repo == "" {
-		return nil
-	}
-
-	return &RepoInfo{
-		Owner: owner,
-		Name:  repo,
-	}
+	return &RepoInfo{Host: strings.ToLower(host), Owner: parts[0], Name: parts[1]}, nil
 }

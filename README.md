@@ -17,9 +17,10 @@ gelf is a Go-based CLI tool that generates Git commit messages and AI-assisted p
 
 ### Prerequisites
 
-- Go 1.24.3 or higher
+- Go 1.25.8 or higher
 - Google Cloud account with Vertex AI API enabled
-- Git (required for commit operations)
+- Git (required for commit and PR operations)
+- GitHub CLI (`gh`), authenticated with `gh auth login` (required for PR operations)
 
 ### Build from Source
 
@@ -147,6 +148,14 @@ gelf pr create
 
 The generated body follows the PR template when available; otherwise, it briefly explains the purpose and key changes, using headings or bullet points when helpful rather than fixed sections.
 
+The PR head is the repository and branch selected by the push remote. gelf respects `branch.<branch>.pushRemote`, `remote.pushDefault`, and the branch's upstream remote, falling back to `origin`. The base repository is the fork's parent when applicable, and the comparison uses that repository's default branch. An update uses the existing PR's base branch instead.
+
+Before generating content, gelf fetches the required base and head refs. This refreshes local refs and objects without changing working files or the current branch. If the base repository has no configured remote, gelf fetches its clone URL without adding a remote. `--dry-run` also fetches these refs but does not push or create/update a PR.
+
+A branch that is only behind the remote must be brought up to date manually before creating or updating a PR. Divergent history requires an explicit force-push confirmation, including with `--yes`. The force push uses a lease tied to the remote commit observed during preparation, so a later remote update is rejected.
+
+Only open PRs (including drafts) with the exact head repository and branch count as existing PRs. Closed and merged PRs do not prevent a new PR. Use `--update` to replace an existing open PR's title and body, or create a new PR if none exists. Multiple matching open PRs cause an error.
+
 After the PR title and description are generated, the interactive prompt lets you:
 
 - Press `y` to create the pull request with the generated content
@@ -155,14 +164,15 @@ After the PR title and description are generated, the interactive prompt lets yo
 
 Options:
 - `--draft` to create a draft PR
-- `--dry-run` to print the generated title/body without creating a PR
+- `--dry-run` to print the generated title/body without pushing or creating/updating a PR (required refs are fetched)
 - `--render` to render markdown in dry-run output (default: true)
-- `--no-render` to disable markdown rendering in dry-run output
+- `--no-render` to disable markdown rendering
 - `--model` to override the model for PR generation
 - `--language` to set the output language for both title and body
 - `--title-language` to set the language for PR title only
 - `--body-language` to set the language for PR body only
-- `--yes` to skip confirmation prompt (also skips the revise step)
+- `--yes` to approve normal push and PR creation/update automatically (also skips revisions; force push still requires confirmation)
+- `--update` to update the matching open PR, or create a new one if none exists
 
 ### Command Options
 
@@ -209,8 +219,11 @@ gelf pr create --model gemini-2.0-flash-exp --language japanese
 # Use different languages for title and body
 gelf pr create --title-language english --body-language japanese
 
-# Skip confirmation prompt
+# Skip normal push and PR confirmation prompts
 gelf pr create --yes
+
+# Regenerate the title and body of the matching open PR, or create a new PR
+gelf pr create --update
 
 ```
 
@@ -289,21 +302,28 @@ This allows you to set a global default language, override it for specific comma
 
 ```
 cmd/
-├── root.go          # Root command definition
+├── root.go          # Command construction and build version
+├── config.go        # Configuration inspection
 ├── commit.go        # Commit command implementation
 └── pr.go            # Pull request command implementation
 internal/
 ├── git/
-│   ├── diff.go      # Git operations (staged and unstaged diffs)
-│   └── branch.go    # Branch and commit range helpers
+│   ├── diff.go      # Staged diffs, complete file summaries, and input limits
+│   ├── branch.go    # Branch and commit range helpers
+│   ├── push.go      # Push target resolution, status, and leases
+│   └── remote.go    # Remote URLs and base ref fetching
 ├── github/
+│   ├── gh.go        # GitHub repository and PR API operations
 │   └── template.go  # GitHub PR template resolution
 ├── ai/
 │   └── vertex.go    # Vertex AI integration (commit messages and PR generation)
 ├── ui/
+│   ├── session.go   # Per-command input, output, and styles
 │   └── tui.go       # Bubble Tea TUI implementation (commit)
+├── process/
+│   └── runner.go    # Context-aware subprocess execution
 └── config/
-    └── config.go    # Configuration management (API keys etc)
+    └── config.go    # Configuration loading and model resolution
 main.go             # Application entry point
 ```
 
@@ -357,9 +377,14 @@ pr:
   language: string       # Language for pull request titles and descriptions (inherits from global if not set)
   title_language: string # Language for PR title only (inherits from pr.language if not set)
   body_language: string  # Language for PR body only (inherits from pr.language if not set)
+  max_diff_bytes: number # Maximum committed diff size sent to the AI (default: 100000)
 
-color: string            # Color output setting: "always" or "never" (default: always)
+color: string            # Color output setting: "auto", "always", or "never" (default: always)
 ```
+
+Both diff limits apply only to AI input. Oversized diffs are truncated at a line/UTF-8 boundary with a warning, while interactive changed-file summaries still include every file and its full line counts. Omitted or zero limits use 100,000 bytes; negative values are invalid.
+
+Configuration files that are missing are skipped during discovery. Malformed YAML and other read errors stop the command and report the affected file instead of silently using defaults. `color: auto` enables color only for terminal output and respects `NO_COLOR` and `TERM=dumb`; `always` is the default and `never` disables styling.
 
 ### Environment Variables
 
@@ -391,6 +416,12 @@ go test ./...
 # Tidy dependencies
 go mod tidy
 ```
+
+Pull request and commit errors are returned as a nonzero exit status, including errors in the interactive UI. External command errors include Git/GitHub diagnostics. `gelf version` reports release, module, or embedded VCS build information independently of the repository where it runs.
+
+Commands receive their Git, GitHub, configuration, and AI dependencies, while UI sessions own their readers, writers, and styles. This keeps command construction independent between executions and lets tests exercise failure paths without external services.
+
+CI runs tests with race detection, `go vet`, Staticcheck, and a build on Linux and macOS. Tests use temporary local Git repositories and mocked AI/GitHub responses; they require no cloud credentials and do not publish real PRs.
 
 ### Available Commands
 

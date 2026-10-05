@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"cloud.google.com/go/auth/credentials"
 	"github.com/EkeMinusYou/gelf/internal/config"
 	"google.golang.org/genai"
 )
@@ -28,49 +29,45 @@ type PullRequestContent struct {
 	Body  string `json:"body"`
 }
 
-type VertexAIClient struct {
-	client     *genai.Client
-	flashModel string
-	proModel   string
+type Client interface {
+	GenerateCommitMessage(context.Context, string, string) (string, error)
+	GeneratePullRequestContent(context.Context, PullRequestInput) (*PullRequestContent, error)
+	RevisePullRequestContent(context.Context, PullRequestInput, *PullRequestContent, string) (*PullRequestContent, error)
 }
 
-func NewVertexAIClient(ctx context.Context, cfg *config.Config) (*VertexAIClient, error) {
-	// Check for GELF_CREDENTIALS first, then fall back to GOOGLE_APPLICATION_CREDENTIALS
-	credentialsPath := os.Getenv("GELF_CREDENTIALS")
-	if credentialsPath == "" {
-		credentialsPath = os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
+type contentGenerator interface {
+	GenerateContent(context.Context, string, []*genai.Content, *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error)
+}
+
+type VertexAIClient struct {
+	generator contentGenerator
+	model     string
+}
+
+func NewVertexAIClient(ctx context.Context, cfg *config.Config, model string) (*VertexAIClient, error) {
+	cc := &genai.ClientConfig{Project: cfg.ProjectID, Location: cfg.Location, Backend: genai.BackendVertexAI}
+	if path := os.Getenv("GELF_CREDENTIALS"); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read GELF_CREDENTIALS: %w", err)
+		}
+		var metadata struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(data, &metadata); err != nil {
+			return nil, fmt.Errorf("invalid GELF_CREDENTIALS JSON: %w", err)
+		}
+		creds, err := credentials.NewCredentialsFromJSON(credentials.CredType(metadata.Type), data, &credentials.DetectOptions{Scopes: []string{"https://www.googleapis.com/auth/cloud-platform"}})
+		if err != nil {
+			return nil, fmt.Errorf("failed to load GELF_CREDENTIALS: %w", err)
+		}
+		cc.Credentials = creds
 	}
-
-	// If we have a credentials path, set it as GOOGLE_APPLICATION_CREDENTIALS
-	// since genai.NewClient uses this environment variable internally
-	if credentialsPath != "" {
-		originalCreds := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
-		os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath)
-
-		// Restore original credentials after client creation
-		defer func() {
-			if originalCreds != "" {
-				os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", originalCreds)
-			} else {
-				os.Unsetenv("GOOGLE_APPLICATION_CREDENTIALS")
-			}
-		}()
-	}
-
-	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		Project:  cfg.ProjectID,
-		Location: cfg.Location,
-		Backend:  genai.BackendVertexAI,
-	})
+	client, err := genai.NewClient(ctx, cc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Vertex AI client: %w", err)
 	}
-
-	return &VertexAIClient{
-		client:     client,
-		flashModel: cfg.FlashModel,
-		proModel:   cfg.ProModel,
-	}, nil
+	return &VertexAIClient{generator: client.Models, model: model}, nil
 }
 
 func (v *VertexAIClient) GenerateCommitMessage(ctx context.Context, diff string, language string) (string, error) {
@@ -106,48 +103,15 @@ Git diff:
 
 Respond with only the commit message, no additional text or formatting.`, language, diff)
 
-	resp, err := v.client.Models.GenerateContent(ctx, v.flashModel,
-		[]*genai.Content{
-			genai.NewContentFromText(prompt, genai.RoleUser),
-		},
-		&genai.GenerateContentConfig{
-			Temperature: genai.Ptr(float32(0.3)),
-		})
+	text, err := v.generate(ctx, prompt, 0.3, false)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate commit message: %w", err)
 	}
-
-	if len(resp.Candidates) == 0 {
-		return "", fmt.Errorf("no candidates in response")
-	}
-
-	if len(resp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("no content parts in response")
-	}
-
-	part := resp.Candidates[0].Content.Parts[0]
-	if part.Text == "" {
-		return "", fmt.Errorf("empty text in response part")
-	}
-
-	return part.Text, nil
+	return text, nil
 }
 
 func (v *VertexAIClient) GeneratePullRequestContent(ctx context.Context, input PullRequestInput) (*PullRequestContent, error) {
-	template := input.Template
-	if strings.TrimSpace(template) == "" {
-		template = "NONE"
-	}
-
-	// Use TitleLanguage and BodyLanguage if specified, otherwise fall back to Language
-	titleLanguage := input.TitleLanguage
-	if titleLanguage == "" {
-		titleLanguage = input.Language
-	}
-	bodyLanguage := input.BodyLanguage
-	if bodyLanguage == "" {
-		bodyLanguage = input.Language
-	}
+	titleLanguage, bodyLanguage, template := input.promptSettings()
 
 	prompt := fmt.Sprintf(`You are an expert software engineer writing a GitHub pull request title and description.
 
@@ -186,52 +150,7 @@ PR_TEMPLATE:
 %s
 `, titleLanguage, bodyLanguage, input.BaseBranch, input.HeadBranch, input.CommitLog, input.DiffStat, input.Diff, template)
 
-	resp, err := v.client.Models.GenerateContent(ctx, v.flashModel,
-		[]*genai.Content{
-			genai.NewContentFromText(prompt, genai.RoleUser),
-		},
-		&genai.GenerateContentConfig{
-			Temperature: genai.Ptr(float32(0.2)),
-		})
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate pull request content: %w", err)
-	}
-
-	if len(resp.Candidates) == 0 {
-		return nil, fmt.Errorf("no candidates in response")
-	}
-
-	if len(resp.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("no content parts in response")
-	}
-
-	part := resp.Candidates[0].Content.Parts[0]
-	if part.Text == "" {
-		return nil, fmt.Errorf("empty text in response part")
-	}
-
-	text := strings.TrimSpace(part.Text)
-	if strings.HasPrefix(text, "```json") {
-		text = strings.TrimPrefix(text, "```json")
-		text = strings.TrimSuffix(text, "```")
-		text = strings.TrimSpace(text)
-	}
-
-	var result PullRequestContent
-	if err := json.Unmarshal([]byte(text), &result); err != nil {
-		return nil, fmt.Errorf("failed to parse JSON response: %w", err)
-	}
-
-	result.Title = strings.TrimSpace(result.Title)
-	result.Body = strings.TrimSpace(result.Body)
-	if result.Title == "" {
-		return nil, fmt.Errorf("generated PR title is empty")
-	}
-	if result.Body == "" {
-		return nil, fmt.Errorf("generated PR body is empty")
-	}
-
-	return &result, nil
+	return v.generatePR(ctx, prompt)
 }
 
 func (v *VertexAIClient) RevisePullRequestContent(ctx context.Context, input PullRequestInput, previous *PullRequestContent, instructions string) (*PullRequestContent, error) {
@@ -242,19 +161,7 @@ func (v *VertexAIClient) RevisePullRequestContent(ctx context.Context, input Pul
 		return nil, fmt.Errorf("revision instructions are empty")
 	}
 
-	template := input.Template
-	if strings.TrimSpace(template) == "" {
-		template = "NONE"
-	}
-
-	titleLanguage := input.TitleLanguage
-	if titleLanguage == "" {
-		titleLanguage = input.Language
-	}
-	bodyLanguage := input.BodyLanguage
-	if bodyLanguage == "" {
-		bodyLanguage = input.Language
-	}
+	titleLanguage, bodyLanguage, template := input.promptSettings()
 
 	prompt := fmt.Sprintf(`You are an expert software engineer revising a GitHub pull request title and description based on user feedback.
 
@@ -300,54 +207,78 @@ USER_REVISION_INSTRUCTIONS:
 %s
 `, titleLanguage, bodyLanguage, input.BaseBranch, input.HeadBranch, input.CommitLog, input.DiffStat, input.Diff, template, previous.Title, previous.Body, instructions)
 
-	resp, err := v.client.Models.GenerateContent(ctx, v.flashModel,
-		[]*genai.Content{
-			genai.NewContentFromText(prompt, genai.RoleUser),
-		},
-		&genai.GenerateContentConfig{
-			Temperature: genai.Ptr(float32(0.2)),
-		})
+	return v.generatePR(ctx, prompt)
+}
+
+func (v *VertexAIClient) generate(ctx context.Context, prompt string, temperature float32, structured bool) (string, error) {
+	opts := &genai.GenerateContentConfig{Temperature: genai.Ptr(temperature)}
+	if structured {
+		opts.ResponseMIMEType = "application/json"
+		opts.ResponseSchema = &genai.Schema{Type: genai.TypeObject, Required: []string{"title", "body"}, Properties: map[string]*genai.Schema{
+			"title": {Type: genai.TypeString}, "body": {Type: genai.TypeString},
+		}}
+	}
+	resp, err := v.generator.GenerateContent(ctx, v.model, []*genai.Content{genai.NewContentFromText(prompt, genai.RoleUser)}, opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to revise pull request content: %w", err)
+		return "", err
 	}
-
-	if len(resp.Candidates) == 0 {
-		return nil, fmt.Errorf("no candidates in response")
+	if resp == nil || len(resp.Candidates) == 0 || resp.Candidates[0] == nil {
+		return "", fmt.Errorf("no candidates in AI response")
 	}
-
-	if len(resp.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("no content parts in response")
+	candidate := resp.Candidates[0]
+	if candidate.FinishReason != "" && candidate.FinishReason != genai.FinishReasonStop {
+		return "", fmt.Errorf("AI response stopped with reason %s: %s", candidate.FinishReason, candidate.FinishMessage)
 	}
-
-	part := resp.Candidates[0].Content.Parts[0]
-	if part.Text == "" {
-		return nil, fmt.Errorf("empty text in response part")
+	if candidate.Content == nil {
+		return "", fmt.Errorf("no content in AI response")
 	}
-
-	text := strings.TrimSpace(part.Text)
-	if strings.HasPrefix(text, "```json") {
-		text = strings.TrimPrefix(text, "```json")
-		text = strings.TrimSuffix(text, "```")
-		text = strings.TrimSpace(text)
+	var text strings.Builder
+	for _, part := range candidate.Content.Parts {
+		if part != nil && !part.Thought {
+			text.WriteString(part.Text)
+		}
 	}
+	result := strings.TrimSpace(text.String())
+	if result == "" {
+		return "", fmt.Errorf("empty text in AI response")
+	}
+	return result, nil
+}
 
+func (v *VertexAIClient) generatePR(ctx context.Context, prompt string) (*PullRequestContent, error) {
+	text, err := v.generate(ctx, prompt, 0.2, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate pull request content: %w", err)
+	}
+	if strings.HasPrefix(text, "```") {
+		if newline := strings.IndexByte(text, '\n'); newline >= 0 && strings.HasSuffix(text, "```") {
+			text = strings.TrimSpace(text[newline+1 : len(text)-3])
+		}
+	}
 	var result PullRequestContent
 	if err := json.Unmarshal([]byte(text), &result); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON response: %w", err)
 	}
-
-	result.Title = strings.TrimSpace(result.Title)
-	result.Body = strings.TrimSpace(result.Body)
-	if result.Title == "" {
-		return nil, fmt.Errorf("revised PR title is empty")
+	result.Title, result.Body = strings.TrimSpace(result.Title), strings.TrimSpace(result.Body)
+	if result.Title == "" || result.Body == "" {
+		return nil, fmt.Errorf("generated PR title and body must not be empty")
 	}
-	if result.Body == "" {
-		return nil, fmt.Errorf("revised PR body is empty")
+	if strings.ContainsAny(result.Title, "\r\n") {
+		return nil, fmt.Errorf("generated PR title must be a single line")
 	}
-
 	return &result, nil
 }
 
-func (v *VertexAIClient) Close() error {
-	return nil
+func (input PullRequestInput) promptSettings() (titleLanguage, bodyLanguage, template string) {
+	titleLanguage, bodyLanguage, template = input.TitleLanguage, input.BodyLanguage, input.Template
+	if titleLanguage == "" {
+		titleLanguage = input.Language
+	}
+	if bodyLanguage == "" {
+		bodyLanguage = input.Language
+	}
+	if strings.TrimSpace(template) == "" {
+		template = "NONE"
+	}
+	return
 }

@@ -4,62 +4,29 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/EkeMinusYou/gelf/internal/config"
 	"github.com/spf13/cobra"
 )
 
-var configCmd = &cobra.Command{
-	Use:   "config",
-	Short: "Manage gelf configuration",
-	Long:  "Manage gelf configuration settings",
-}
-
-var configListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List current configuration",
-	Long:  "Display current configuration values from file and environment variables",
-	RunE:  runConfigList,
-}
-
-func init() {
-	rootCmd.AddCommand(configCmd)
-	configCmd.AddCommand(configListCmd)
-}
-
-func runConfigList(cmd *cobra.Command, args []string) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
-	}
-
-	fmt.Println("Current Configuration:")
-	fmt.Println("======================")
-	fmt.Printf("Project ID:        %s\n", cfg.ProjectID)
-	fmt.Printf("Location:          %s\n", cfg.Location)
-	fmt.Printf("Flash Model:       %s\n", cfg.FlashModel)
-	fmt.Printf("Pro Model:         %s\n", cfg.ProModel)
-	fmt.Printf("Commit Model:      %s\n", cfg.CommitModel)
-	fmt.Printf("Commit Language:   %s\n", cfg.CommitLanguage)
-	fmt.Printf("Commit Diff Limit: %d bytes\n", cfg.CommitMaxDiffBytes)
-	fmt.Printf("PR Model:          %s\n", cfg.PRModel)
-	fmt.Printf("PR Language:       %s\n", cfg.PRLanguage)
-
-	fmt.Println("\nEnvironment Variables:")
-	fmt.Println("======================")
-	printEnvVar("VERTEXAI_PROJECT")
-	printEnvVar("GOOGLE_CLOUD_PROJECT")
-	printEnvVar("VERTEXAI_LOCATION")
-	printEnvVar("GELF_CREDENTIALS")
-	printEnvVar("GOOGLE_APPLICATION_CREDENTIALS")
-
-	return nil
-}
-
-func printEnvVar(name string) {
-	value := os.Getenv(name)
-	if value != "" {
-		fmt.Printf("%-30s %s\n", name+":", value)
-	} else {
-		fmt.Printf("%-30s (not set)\n", name+":")
-	}
+func newConfigCommand(deps dependencies) *cobra.Command {
+	cmd := &cobra.Command{Use: "config", Short: "Manage gelf configuration"}
+	cmd.AddCommand(&cobra.Command{Use: "list", Short: "List current configuration", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := deps.LoadConfig()
+			if err != nil {
+				return fmt.Errorf("failed to load configuration: %w", err)
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "Current Configuration:\n======================\nProject ID:        %s\nLocation:          %s\nFlash Model:       %s\nPro Model:         %s\nCommit Model:      %s\nCommit Language:   %s\nCommit Diff Limit: %d bytes\nPR Model:          %s\nPR Language:       %s\nPR Title Language: %s\nPR Body Language:  %s\nPR Diff Limit:     %d bytes\nColor:             %s\n", cfg.ProjectID, cfg.Location, cfg.FlashModel, cfg.ProModel, cfg.CommitModel, cfg.CommitLanguage, cfg.CommitMaxDiffBytes, cfg.PRModel, cfg.PRLanguage, cfg.PRTitleLanguage, cfg.PRBodyLanguage, cfg.PRMaxDiffBytes, cfg.Color)
+			fmt.Fprintln(out, "\nEnvironment Variables:\n======================")
+			for _, name := range []string{"VERTEXAI_PROJECT", "GOOGLE_CLOUD_PROJECT", "VERTEXAI_LOCATION", "GELF_CREDENTIALS", "GOOGLE_APPLICATION_CREDENTIALS"} {
+				value := os.Getenv(name)
+				if value == "" {
+					value = "(not set)"
+				}
+				fmt.Fprintf(out, "%-30s %s\n", name+":", value)
+			}
+			return nil
+		},
+	})
+	return cmd
 }
