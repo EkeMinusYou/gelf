@@ -17,7 +17,7 @@ gelf is a Go-based CLI tool that generates Git commit messages and AI-assisted p
 
 ### Prerequisites
 
-- Go 1.25.8 or higher
+- Go 1.27.1 or higher
 - Google Cloud account with Vertex AI API enabled
 - Git (required for commit and PR operations)
 - GitHub CLI (`gh`), authenticated with `gh auth login` (required for PR operations)
