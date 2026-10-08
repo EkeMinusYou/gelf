@@ -6,15 +6,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/config"
 	"github.com/EkeMinusYou/gelf/internal/git"
 	"github.com/EkeMinusYou/gelf/internal/github"
 	"github.com/EkeMinusYou/gelf/internal/process"
+	"github.com/EkeMinusYou/gelf/internal/sessionlog"
 	"github.com/EkeMinusYou/gelf/internal/testutil"
 	"github.com/EkeMinusYou/gelf/internal/ui"
 )
@@ -38,7 +41,124 @@ func (c *commandAI) RevisePullRequestContent(ctx context.Context, input ai.PullR
 }
 
 func testConfig() *config.Config {
-	return &config.Config{ProjectID: "test", Location: "global", FlashModel: "flash-model", ProModel: "pro-model", CommitModel: "flash-model", PRModel: "pro-model", CommitLanguage: "english", PRLanguage: "english", PRTitleLanguage: "english", PRBodyLanguage: "english", CommitMaxDiffBytes: 100000, PRMaxDiffBytes: 100000, Color: "never"}
+	return &config.Config{ProjectID: "test", Location: "global", FlashModel: "flash-model", ProModel: "pro-model", CommitModel: "flash-model", PRModel: "pro-model", CommitLanguage: "english", PRLanguage: "english", PRTitleLanguage: "english", PRBodyLanguage: "english", CommitMaxDiffBytes: 100000, PRMaxDiffBytes: 100000, PRSessionLogCount: 3, PRMaxSessionLogBytes: 20000, Color: "never"}
+}
+
+func TestPRDryRunUsesSessionContextWhenEnabled(t *testing.T) {
+	f := newPRFixture(t)
+	storage := t.TempDir()
+	path := filepath.Join(storage, "projects/project/session.jsonl")
+	now := time.Now()
+	entry, err := json.Marshal(map[string]any{"type": "user", "cwd": f.Dir, "gitBranch": "feature", "timestamp": now.Format(time.RFC3339Nano), "message": map[string]string{"role": "user", "content": "Preserve compatibility with older clients"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(entry, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.Deps.FindSessions = (sessionlog.Detector{CodexHome: filepath.Join(storage, "codex"), ClaudeHome: storage, Now: now}).Find
+	_, stderr, err := executeCommand(t, f.Deps, "", "pr", "create", "--dry-run", "--session-logs")
+	if err != nil || !strings.Contains(f.AI.Input.SessionContext, "Preserve compatibility") || !strings.Contains(stderr, "Using Claude session log:") || !strings.Contains(stderr, path) {
+		t.Fatalf("input=%+v stderr=%q err=%v", f.AI.Input, stderr, err)
+	}
+}
+
+func TestPRSessionDiscoveryCanBeDisabled(t *testing.T) {
+	for _, flag := range []bool{false, true} {
+		t.Run(fmt.Sprint(flag), func(t *testing.T) {
+			f := newPRFixture(t)
+			f.Config.PRSessionLogs = flag
+			f.Deps.FindSessions = func(context.Context, string, string, sessionlog.Options) (sessionlog.Result, error) {
+				t.Fatal("disabled session discovery was called")
+				return sessionlog.Result{}, nil
+			}
+			args := []string{"pr", "create", "--dry-run"}
+			if flag {
+				args = append(args, "--no-session-logs")
+			}
+			if _, _, err := executeCommand(t, f.Deps, "", args...); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestPRSessionFlagsOverrideConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		enabled    bool
+		count      int
+		flags      []string
+		wantCalled bool
+		wantCount  int
+	}{
+		{name: "default disabled", count: 3},
+		{name: "enabled by flag", count: 3, flags: []string{"--session-logs"}, wantCalled: true, wantCount: 3},
+		{name: "enabled by configuration", enabled: true, count: 5, wantCalled: true, wantCount: 5},
+		{name: "count flag overrides configuration", enabled: true, count: 5, flags: []string{"--session-log-count", "2"}, wantCalled: true, wantCount: 2},
+		{name: "count alone keeps discovery disabled", count: 3, flags: []string{"--session-log-count", "5"}},
+		{name: "false flag overrides enabled configuration", enabled: true, count: 3, flags: []string{"--session-logs=false"}},
+		{name: "disable flag takes precedence", count: 3, flags: []string{"--session-logs", "--no-session-logs"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPRFixture(t)
+			f.Config.PRSessionLogs, f.Config.PRSessionLogCount = tc.enabled, tc.count
+			called := false
+			f.Deps.FindSessions = func(ctx context.Context, root, branch string, opts sessionlog.Options) (sessionlog.Result, error) {
+				called = true
+				if opts.MaxSessions != tc.wantCount || opts.MaxBytes != 20000 {
+					t.Fatalf("unexpected discovery options: %+v", opts)
+				}
+				return sessionlog.Result{Context: "session background"}, nil
+			}
+			args := append([]string{"pr", "create", "--dry-run"}, tc.flags...)
+			if _, _, err := executeCommand(t, f.Deps, "", args...); err != nil {
+				t.Fatal(err)
+			}
+			if called != tc.wantCalled || (f.AI.Input.SessionContext != "") != tc.wantCalled {
+				t.Fatalf("called=%t input=%+v", called, f.AI.Input)
+			}
+			if f.Config.PRSessionLogs != tc.enabled || f.Config.PRSessionLogCount != tc.count {
+				t.Fatal("CLI flags mutated shared configuration")
+			}
+		})
+	}
+}
+
+func TestPRRejectsInvalidSessionCountBeforeGitOperations(t *testing.T) {
+	for _, value := range []string{"0", "-1"} {
+		deps := dependencies{LoadConfig: func() (*config.Config, error) { return testConfig(), nil }}
+		// Git and GitHub are intentionally absent: validation must happen first.
+		_, _, err := executeCommand(t, deps, "", "pr", "create", "--session-log-count", value)
+		if err == nil || !strings.Contains(err.Error(), "--session-log-count must be greater than zero") {
+			t.Fatalf("value=%s err=%v", value, err)
+		}
+	}
+}
+
+func TestPRSessionDiscoveryWarningsAreNonfatalAndUseLocalBranch(t *testing.T) {
+	f := newPRFixture(t)
+	f.Config.PRSessionLogs = true
+	// The remote branch name can differ from the branch recorded by the agent.
+	testutil.Git(t, f.Dir, "config", "branch.feature.remote", "origin")
+	testutil.Git(t, f.Dir, "config", "branch.feature.merge", "refs/heads/remote-feature")
+	canonicalRoot, err := filepath.EvalSymlinks(f.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Deps.FindSessions = func(ctx context.Context, root, branch string, opts sessionlog.Options) (sessionlog.Result, error) {
+		if root != canonicalRoot || branch != "feature" || opts.MaxBytes != 20000 || opts.MaxSessions != 3 {
+			t.Fatalf("discovery root=%q branch=%q options=%+v", root, branch, opts)
+		}
+		return sessionlog.Result{Context: "background intent", Truncated: true}, fmt.Errorf("unreadable log")
+	}
+	_, stderr, err := executeCommand(t, f.Deps, "", "pr", "create", "--dry-run")
+	if err != nil || f.AI.Input.SessionContext != "background intent" || !strings.Contains(stderr, "unreadable log") || !strings.Contains(stderr, "context was truncated") {
+		t.Fatalf("input=%+v stderr=%q err=%v", f.AI.Input, stderr, err)
+	}
 }
 
 func executeCommand(t *testing.T, deps dependencies, input string, args ...string) (string, string, error) {

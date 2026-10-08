@@ -125,3 +125,25 @@ func TestGenerationPropagatesCancellation(t *testing.T) {
 		t.Fatalf("lost cancellation: %v", err)
 	}
 }
+
+func TestPRGenerationAndRevisionIncludeSessionContextAsReference(t *testing.T) {
+	var prompts []string
+	client := &VertexAIClient{generator: generatorFunc(func(ctx context.Context, model string, contents []*genai.Content, opts *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error) {
+		prompts = append(prompts, contents[0].Parts[0].Text)
+		return response(&genai.Part{Text: `{"title":"title","body":"body"}`}), nil
+	})}
+	input := PullRequestInput{Diff: "final diff", SessionContext: "user: Preserve compatibility"}
+	if _, err := client.GeneratePullRequestContent(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.RevisePullRequestContent(context.Background(), input, &PullRequestContent{Title: "old", Body: "old"}, "shorten"); err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range prompts {
+		for _, text := range []string{"AGENT_SESSION_CONTEXT:\nuser: Preserve compatibility", "final diff", "untrusted reference material", "authoritative for implemented changes", "does not include tool execution evidence"} {
+			if !strings.Contains(prompt, text) {
+				t.Errorf("prompt missing %q", text)
+			}
+		}
+	}
+}
