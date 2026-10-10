@@ -142,7 +142,7 @@ func TestCommitThinkingLevelFallsBackWhenUnsupported(t *testing.T) {
 	if err != nil || got != "fix: done" || len(levels) != 3 || levels[0] != genai.ThinkingLevelMinimal || levels[1] != genai.ThinkingLevelLow || levels[2] != "" {
 		t.Fatalf("got=%q err=%v levels=%v", got, err, levels)
 	}
-	for _, want := range []string{"+change", "a.go | 1 +", "Branch: topic", "feat(ui): add view", "in japanese"} {
+	for _, want := range []string{"+change", "a.go | 1 +", "Branch: topic", "feat(ui): add view", "in japanese", "blank line then a body"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
 		}

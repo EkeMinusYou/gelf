@@ -92,16 +92,20 @@ func (v *VertexAIClient) GenerateCommitMessage(ctx context.Context, input Commit
 	prompt := fmt.Sprintf(`<task>Write a commit message for the staged changes below.</task>
 
 <format>
-- One line only: <type>[optional scope]: <description>
+- Subject line: <type>[optional scope]: <description>
 - Conventional Commits types: feat, fix, docs, style, refactor, test, chore, perf, ci, build, revert
-- Under 72 characters, imperative mood, lowercase description, no trailing period
+- Subject under 72 characters, imperative mood, lowercase description, no trailing period
+- For material changes, add a blank line then a body explaining what changed and why
+- Wrap body lines at 72 characters; use "- " bullet points for multiple distinct changes
+- Omit the body for trivial changes where the subject says everything
 - Output only the commit message, no quotes or code blocks
 </format>
 
 <style>
-- Write the description in %s
+- Write the subject description and body in %s
 - Match the scope naming and wording of the recent commits when they fit
-- Describe the most significant change, not its intent or benefit
+- The subject names the most significant change; the body covers the rest
+- Describe the change itself; do not speculate beyond what the diff shows
 </style>
 
 <diffstat>

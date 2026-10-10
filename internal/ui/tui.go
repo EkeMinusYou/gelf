@@ -8,7 +8,7 @@ import (
 	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/git"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -37,7 +37,7 @@ type model struct {
 	err             error
 	state           state
 	spinner         spinner.Model
-	textInput       textinput.Model
+	textArea        textarea.Model
 }
 
 type msgCommitGenerated struct {
@@ -55,10 +55,11 @@ func NewTUI(session *Session, aiClient ai.Client, input ai.CommitInput, summary 
 	s.Spinner = spinner.Dot
 	s.Style = session.Styles.Loading
 
-	ti := textinput.New()
-	ti.Placeholder = "Enter your commit message..."
-	ti.CharLimit = 0
-	ti.Width = 60
+	ta := textarea.New()
+	ta.Placeholder = "Enter your commit message..."
+	ta.ShowLineNumbers = false
+	ta.CharLimit = 0
+	ta.SetWidth(80)
 
 	return &model{
 		session: session, styles: session.Styles, ctx: ctx, cancel: cancel, commit: commit,
@@ -67,7 +68,7 @@ func NewTUI(session *Session, aiClient ai.Client, input ai.CommitInput, summary 
 		diffSummary:    summary,
 		state:          stateLoading,
 		spinner:        s,
-		textInput:      ti,
+		textArea:       ta,
 	}
 }
 
@@ -96,28 +97,29 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(m.spinner.Tick, m.commitChanges())
 			case "e", "E":
 				m.originalMessage = m.commitMessage
-				m.textInput.SetValue(m.commitMessage)
-				m.textInput.Focus()
+				// Leave room to add a body below a subject-only message.
+				m.textArea.SetHeight(min(max(strings.Count(m.commitMessage, "\n")+3, 5), 15))
+				m.textArea.SetValue(m.commitMessage)
 				m.state = stateEditing
-				return m, textinput.Blink
+				return m, m.textArea.Focus()
 			case "n", "N", "q", "ctrl+c":
 				return m, tea.Quit
 			}
 		case stateEditing:
 			switch msg.String() {
-			case "enter":
-				m.commitMessage = strings.TrimSpace(m.textInput.Value())
+			case "ctrl+s":
+				m.commitMessage = strings.TrimSpace(m.textArea.Value())
 				if m.commitMessage == "" {
 					m.commitMessage = m.originalMessage
 				}
-				m.textInput.Blur()
+				m.textArea.Blur()
 				m.state = stateConfirm
 			case "esc":
 				m.commitMessage = m.originalMessage
-				m.textInput.Blur()
+				m.textArea.Blur()
 				m.state = stateConfirm
 			default:
-				m.textInput, cmd = m.textInput.Update(msg)
+				m.textArea, cmd = m.textArea.Update(msg)
 				return m, cmd
 			}
 		case stateSuccess, stateError:
@@ -180,8 +182,8 @@ func (m *model) View() string {
 	case stateEditing:
 		diffSummary := m.formatDiffSummary()
 		header := m.styles.Title.Render("✏️  Edit Commit Message:")
-		inputView := m.textInput.View()
-		prompt := m.styles.EditPrompt.Render("Press Enter to confirm, Esc to cancel")
+		inputView := m.textArea.View()
+		prompt := m.styles.EditPrompt.Render("Enter for a new line, Ctrl+S to confirm, Esc to cancel")
 
 		if diffSummary != "" {
 			return fmt.Sprintf("%s\n\n%s\n\n%s\n\n%s", diffSummary, header, inputView, prompt)

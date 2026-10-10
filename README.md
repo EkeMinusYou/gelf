@@ -131,12 +131,12 @@ git add .
 gelf commit
 ```
 
-The AI receives the staged diff, its diffstat, the current branch name, and the five most recent commit subjects so that the generated message follows the repository's existing scope and wording style.
+Generated messages have a Conventional Commits subject line and, for material changes, a body separated by a blank line. The AI receives the staged diff, its diffstat, the current branch name, and the five most recent commit subjects so that the generated message follows the repository's existing scope and wording style.
 
 3. Interactive TUI operations:
    - Review the AI-generated commit message
    - Press `y` to approve or `n` to cancel
-   - Press `e` to edit the commit message
+   - Press `e` to edit the commit message (Enter inserts a new line, `Ctrl+S` confirms, `Esc` cancels)
    - Press `q` or `Ctrl+C` to cancel during generation
    - The commit will be executed automatically upon approval
    - Success message displays after TUI exits

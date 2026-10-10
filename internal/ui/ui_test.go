@@ -95,10 +95,21 @@ func TestTUIEditingCancellationAndFullSummary(t *testing.T) {
 	defer tui.cancel()
 	tui.Update(msgCommitGenerated{message: "original"})
 	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	tui.textInput.SetValue("edited")
+	tui.textArea.SetValue("edited")
 	tui.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if tui.commitMessage != "original" || tui.state != stateConfirm || !strings.Contains(tui.View(), "later.txt (+3)") {
 		t.Fatal("editing or full summary incorrect")
+	}
+	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	tui.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	tui.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("- body")})
+	if tui.state != stateEditing {
+		t.Fatal("Enter must insert a newline while editing")
+	}
+	tui.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if tui.commitMessage != "original\n\n- body" || tui.state != stateConfirm {
+		t.Fatalf("multi-line edit=%q state=%v", tui.commitMessage, tui.state)
 	}
 	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 	_, quit := tui.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
