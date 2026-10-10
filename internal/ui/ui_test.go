@@ -20,7 +20,7 @@ type fakeAI struct {
 	input        ai.PullRequestInput
 }
 
-func (f *fakeAI) GenerateCommitMessage(ctx context.Context, diff, language string) (string, error) {
+func (f *fakeAI) GenerateCommitMessage(ctx context.Context, input ai.CommitInput) (string, error) {
 	return "fix: test", f.commitError
 }
 func (f *fakeAI) GeneratePullRequestContent(ctx context.Context, input ai.PullRequestInput) (*ai.PullRequestContent, error) {
@@ -72,7 +72,7 @@ func TestTUIPropagatesGenerationAndCommitErrors(t *testing.T) {
 				client.commitError = failure
 			}
 			session := NewSession(context.Background(), strings.NewReader(""), io.Discard, io.Discard, false, false)
-			tui := NewTUI(session, client, "diff", git.DiffSummary{}, "english", func(context.Context, string) error { return failure })
+			tui := NewTUI(session, client, ai.CommitInput{Diff: "diff", Language: "english"}, git.DiffSummary{}, func(context.Context, string) error { return failure })
 			filter := tea.WithFilter(func(model tea.Model, msg tea.Msg) tea.Msg {
 				if generated, ok := msg.(msgCommitGenerated); ok && generated.err == nil {
 					// Deliver approval after the generated message, without needing a real TTY.
@@ -91,7 +91,7 @@ func TestTUIPropagatesGenerationAndCommitErrors(t *testing.T) {
 
 func TestTUIEditingCancellationAndFullSummary(t *testing.T) {
 	session := NewSession(context.Background(), strings.NewReader(""), io.Discard, io.Discard, false, false)
-	tui := NewTUI(session, &fakeAI{}, "truncated", git.DiffSummary{Files: []git.FileDiff{{Name: "later.txt", AddedLines: 3}}}, "english", nil)
+	tui := NewTUI(session, &fakeAI{}, ai.CommitInput{Diff: "truncated", Language: "english"}, git.DiffSummary{Files: []git.FileDiff{{Name: "later.txt", AddedLines: 3}}}, nil)
 	defer tui.cancel()
 	tui.Update(msgCommitGenerated{message: "original"})
 	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
@@ -145,7 +145,7 @@ type blockingAI struct {
 	started, finished chan struct{}
 }
 
-func (b *blockingAI) GenerateCommitMessage(ctx context.Context, diff, language string) (string, error) {
+func (b *blockingAI) GenerateCommitMessage(ctx context.Context, input ai.CommitInput) (string, error) {
 	close(b.started)
 	<-ctx.Done()
 	close(b.finished)
@@ -159,7 +159,7 @@ func TestTUIQuitCancelsPendingAI(t *testing.T) {
 	defer writer.Close()
 	go func() { <-client.started; _, _ = io.WriteString(writer, "q") }()
 	session := NewSession(context.Background(), input, io.Discard, io.Discard, false, false)
-	tui := NewTUI(session, client, "diff", git.DiffSummary{}, "english", nil)
+	tui := NewTUI(session, client, ai.CommitInput{Diff: "diff", Language: "english"}, git.DiffSummary{}, nil)
 	if err := tui.Run(tea.WithoutRenderer()); err != nil {
 		t.Fatal(err)
 	}

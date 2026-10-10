@@ -51,7 +51,7 @@ main.go               # アプリケーションエントリーポイント
 - **コミット対象**: ステージング済み変更のみ (`git diff --staged`)
 - **PR対象**: ベースブランチとHEAD間のコミット/差分
 - **AIプロバイダー**: Vertex AI (Geminiモデル)
-- **デフォルトFlashモデル**: gemini-3-flash-preview
+- **デフォルトFlashモデル**: gemini-3.8-flash
 - **デフォルトProモデル**: gemini-3.1-pro-preview
 - **モデル設定**: 設定ファイル（gelf.yml）で変更可能
 - **入力**: 生のgit diff出力 (フィルタリングなし)
@@ -106,7 +106,7 @@ go run main.go pr create     # PR作成コマンド実行
 アプリケーションには以下のVertex AI設定が必要です：
 - Google Cloud プロジェクトID
 - Vertex AI API認証情報
-- モデル選択 (デフォルト: gemini-3-flash-preview)
+- モデル選択 (デフォルト: gemini-3.8-flash)
 
 ### 設定ファイル
 
@@ -123,7 +123,7 @@ vertex_ai:
   location: "global"
 
 model:
-  flash: "gemini-3-flash-preview"  # 高速処理用モデル
+  flash: "gemini-3.8-flash"  # 高速処理用モデル
   pro: "gemini-3.1-pro-preview"     # 高品質処理用モデル
 ```
 

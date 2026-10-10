@@ -30,7 +30,7 @@ type model struct {
 	cancel          context.CancelFunc
 	commit          func(context.Context, string) error
 	aiClient        ai.Client
-	diff            string
+	input           ai.CommitInput
 	diffSummary     git.DiffSummary
 	commitMessage   string
 	originalMessage string
@@ -38,7 +38,6 @@ type model struct {
 	state           state
 	spinner         spinner.Model
 	textInput       textinput.Model
-	commitLanguage  string
 }
 
 type msgCommitGenerated struct {
@@ -50,7 +49,7 @@ type msgCommitDone struct {
 	err error
 }
 
-func NewTUI(session *Session, aiClient ai.Client, diff string, summary git.DiffSummary, commitLanguage string, commit func(context.Context, string) error) *model {
+func NewTUI(session *Session, aiClient ai.Client, input ai.CommitInput, summary git.DiffSummary, commit func(context.Context, string) error) *model {
 	ctx, cancel := context.WithCancel(session.Context)
 	s := spinner.New()
 	s.Spinner = spinner.Dot
@@ -64,12 +63,11 @@ func NewTUI(session *Session, aiClient ai.Client, diff string, summary git.DiffS
 	return &model{
 		session: session, styles: session.Styles, ctx: ctx, cancel: cancel, commit: commit,
 		aiClient:       aiClient,
-		diff:           diff,
+		input:          input,
 		diffSummary:    summary,
 		state:          stateLoading,
 		spinner:        s,
 		textInput:      ti,
-		commitLanguage: commitLanguage,
 	}
 }
 
@@ -208,7 +206,7 @@ func (m *model) View() string {
 func (m *model) generateCommitMessage() tea.Cmd {
 	return tea.Cmd(func() tea.Msg {
 		ctx := m.ctx
-		message, err := m.aiClient.GenerateCommitMessage(ctx, m.diff, m.commitLanguage)
+		message, err := m.aiClient.GenerateCommitMessage(ctx, m.input)
 		return msgCommitGenerated{
 			message: strings.TrimSpace(message),
 			err:     err,

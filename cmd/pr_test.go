@@ -21,12 +21,13 @@ import (
 
 type commandAI struct {
 	Input                 ai.PullRequestInput
-	Diff, Language, Model string
+	Commit                ai.CommitInput
+	Model                 string
 	Err                   error
 }
 
-func (c *commandAI) GenerateCommitMessage(ctx context.Context, diff, language string) (string, error) {
-	c.Diff, c.Language = diff, language
+func (c *commandAI) GenerateCommitMessage(ctx context.Context, input ai.CommitInput) (string, error) {
+	c.Commit = input
 	return "fix: generated message", c.Err
 }
 func (c *commandAI) GeneratePullRequestContent(ctx context.Context, input ai.PullRequestInput) (*ai.PullRequestContent, error) {

@@ -37,6 +37,22 @@ func TestStagedSummary(t *testing.T) {
 	}
 }
 
+func TestRecentCommitSubjects(t *testing.T) {
+	dir := t.TempDir()
+	testutil.Git(t, dir, "init", "-q")
+	repo := NewRepository(dir)
+	if subjects, err := repo.RecentCommitSubjects(context.Background(), 2); err != nil || subjects != "" {
+		t.Fatalf("unborn branch: %q %v", subjects, err)
+	}
+	dir = testutil.Repo(t)
+	for _, subject := range []string{"first", "second", "third"} {
+		testutil.Git(t, dir, "commit", "-q", "--allow-empty", "-m", subject)
+	}
+	if subjects, err := NewRepository(dir).RecentCommitSubjects(context.Background(), 2); err != nil || subjects != "third\nsecond" {
+		t.Fatalf("subjects: %q %v", subjects, err)
+	}
+}
+
 func TestPushStatusAndLease(t *testing.T) {
 	ctx := context.Background()
 	dir := testutil.Repo(t)

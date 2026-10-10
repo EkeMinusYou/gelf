@@ -14,6 +14,9 @@ import (
 const DefaultCommitMaxDiffBytes = 100_000
 const DefaultPRMaxDiffBytes = 100_000
 
+// DefaultCommitThinking keeps commit message generation fast; the task rarely benefits from reasoning.
+const DefaultCommitThinking = "minimal"
+
 type Config struct {
 	ProjectID          string
 	Location           string
@@ -22,6 +25,7 @@ type Config struct {
 	CommitLanguage     string
 	CommitModel        string
 	CommitMaxDiffBytes int
+	CommitThinking     string
 	PRLanguage         string
 	PRTitleLanguage    string
 	PRBodyLanguage     string
@@ -45,6 +49,7 @@ type FileConfig struct {
 		Model        string `yaml:"model"`
 		Language     string `yaml:"language"`
 		MaxDiffBytes int    `yaml:"max_diff_bytes"`
+		Thinking     string `yaml:"thinking"`
 	} `yaml:"commit"`
 	PR struct {
 		MaxDiffBytes  int    `yaml:"max_diff_bytes"`
@@ -85,7 +90,7 @@ func Load() (*Config, error) {
 	// Define model names
 	flashModel := fileConfig.Model.Flash
 	if flashModel == "" {
-		flashModel = "gemini-3-flash-preview"
+		flashModel = "gemini-3.8-flash"
 	}
 
 	proModel := fileConfig.Model.Pro
@@ -113,6 +118,11 @@ func Load() (*Config, error) {
 	commitMaxDiffBytes := fileConfig.Commit.MaxDiffBytes
 	if commitMaxDiffBytes <= 0 {
 		commitMaxDiffBytes = DefaultCommitMaxDiffBytes
+	}
+
+	commitThinking := fileConfig.Commit.Thinking
+	if commitThinking == "" {
+		commitThinking = DefaultCommitThinking
 	}
 
 	// PR settings
@@ -147,7 +157,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		ProjectID: projectID, Location: location,
 		FlashModel: flashModel, ProModel: proModel,
-		CommitLanguage: commitLanguage, CommitMaxDiffBytes: commitMaxDiffBytes,
+		CommitLanguage: commitLanguage, CommitMaxDiffBytes: commitMaxDiffBytes, CommitThinking: commitThinking,
 		PRLanguage: prLanguage, PRTitleLanguage: prTitleLanguage, PRBodyLanguage: prBodyLanguage,
 		PRMaxDiffBytes: fileConfig.PR.MaxDiffBytes, Color: color,
 	}
@@ -156,6 +166,11 @@ func Load() (*Config, error) {
 	}
 	if fileConfig.Commit.MaxDiffBytes < 0 || fileConfig.PR.MaxDiffBytes < 0 {
 		return nil, fmt.Errorf("max_diff_bytes must not be negative")
+	}
+	switch commitThinking {
+	case "default", "minimal", "low", "medium", "high":
+	default:
+		return nil, fmt.Errorf("invalid commit.thinking setting %q: expected default, minimal, low, medium, or high", commitThinking)
 	}
 	if color != "always" && color != "never" && color != "auto" {
 		return nil, fmt.Errorf("invalid color setting %q: expected always, never, or auto", color)

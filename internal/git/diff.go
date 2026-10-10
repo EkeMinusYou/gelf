@@ -15,6 +15,20 @@ func (r *Repository) StagedDiff(ctx context.Context) (string, error) {
 	return strings.TrimSpace(out), err
 }
 
+func (r *Repository) StagedDiffStat(ctx context.Context) (string, error) {
+	out, err := r.run(ctx, "--no-pager", "diff", "--staged", "--no-ext-diff", "--no-color", "--stat", "--")
+	return strings.TrimSpace(out), err
+}
+
+// RecentCommitSubjects returns up to limit subjects from HEAD, newest first, or "" on an unborn branch.
+func (r *Repository) RecentCommitSubjects(ctx context.Context, limit int) (string, error) {
+	if _, err := r.run(ctx, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"); exitCode(err, 1) {
+		return "", nil
+	}
+	out, err := r.run(ctx, "log", "-n", strconv.Itoa(limit), "--no-merges", "--format=%s", "HEAD", "--")
+	return strings.TrimSpace(out), err
+}
+
 func (r *Repository) Commit(ctx context.Context, message string) error {
 	if strings.TrimSpace(message) == "" {
 		return fmt.Errorf("commit message must not be empty")

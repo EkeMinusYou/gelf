@@ -3,10 +3,14 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/git"
 	"github.com/EkeMinusYou/gelf/internal/ui"
 	"github.com/spf13/cobra"
 )
+
+// recentCommitCount is how many commit subjects are given to the AI as style examples.
+const recentCommitCount = 5
 
 type commitOptions struct {
 	DryRun, Quiet, Yes bool
@@ -56,6 +60,17 @@ func runCommit(cmd *cobra.Command, opts commitOptions, deps dependencies) error 
 		return fmt.Errorf("failed to summarize staged changes: %w", err)
 	}
 	aiDiff := limitDiffWithWarning(diff, cfg.CommitMaxDiffBytes, "staged", session)
+	diffStat, err := deps.Git.StagedDiffStat(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get staged diff stat: %w", err)
+	}
+	recentCommits, err := deps.Git.RecentCommitSubjects(ctx, recentCommitCount)
+	if err != nil {
+		return fmt.Errorf("failed to get recent commits: %w", err)
+	}
+	// Branch is optional context, so a detached HEAD is not an error here.
+	branch, _ := deps.Git.CurrentBranch(ctx)
+	input := ai.CommitInput{Diff: aiDiff, DiffStat: diffStat, Branch: branch, RecentCommits: recentCommits, Language: language}
 	client, err := deps.NewAI(ctx, cfg, model)
 	if err != nil {
 		return fmt.Errorf("failed to create AI client: %w", err)
@@ -71,7 +86,7 @@ func runCommit(cmd *cobra.Command, opts commitOptions, deps dependencies) error 
 			}
 			fmt.Fprintf(session.Err, "\n%s\n%s\n\n", header, aiDiff)
 		}
-		message, err := client.GenerateCommitMessage(ctx, aiDiff, language)
+		message, err := client.GenerateCommitMessage(ctx, input)
 		if err != nil {
 			return fmt.Errorf("failed to generate commit message: %w", err)
 		}
@@ -86,7 +101,7 @@ func runCommit(cmd *cobra.Command, opts commitOptions, deps dependencies) error 
 		fmt.Fprintln(session.Out, session.Styles.Success.Render("✓ Commit successful"))
 		return nil
 	}
-	return ui.NewTUI(session, client, aiDiff, summary, language, deps.Git.Commit).Run()
+	return ui.NewTUI(session, client, input, summary, deps.Git.Commit).Run()
 }
 
 func limitDiffWithWarning(diff string, maxBytes int, kind string, session *ui.Session) string {

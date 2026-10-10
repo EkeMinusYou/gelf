@@ -44,7 +44,7 @@ func TestResponseExtraction(t *testing.T) {
 				}
 				return tc.resp, nil
 			})}
-			got, err := client.GenerateCommitMessage(context.Background(), "+change", "english")
+			got, err := client.GenerateCommitMessage(context.Background(), CommitInput{Diff: "+change", Language: "english"})
 			if tc.want == "" {
 				if err == nil {
 					t.Fatal("invalid response accepted")
@@ -59,7 +59,7 @@ func TestResponseExtraction(t *testing.T) {
 	client := &VertexAIClient{generator: generatorFunc(func(context.Context, string, []*genai.Content, *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error) {
 		return truncated, nil
 	})}
-	if _, err := client.GenerateCommitMessage(context.Background(), "diff", "english"); err == nil {
+	if _, err := client.GenerateCommitMessage(context.Background(), CommitInput{Diff: "diff", Language: "english"}); err == nil {
 		t.Fatal("truncated response accepted")
 	}
 }
@@ -121,7 +121,49 @@ func TestGenerationPropagatesCancellation(t *testing.T) {
 	client := &VertexAIClient{generator: generatorFunc(func(ctx context.Context, model string, input []*genai.Content, opts *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error) {
 		return nil, ctx.Err()
 	})}
-	if _, err := client.GenerateCommitMessage(ctx, "diff", "english"); !errors.Is(err, context.Canceled) {
+	if _, err := client.GenerateCommitMessage(ctx, CommitInput{Diff: "diff", Language: "english"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("lost cancellation: %v", err)
+	}
+}
+
+func TestCommitThinkingLevelFallsBackWhenUnsupported(t *testing.T) {
+	var levels []genai.ThinkingLevel
+	var prompt string
+	client := &VertexAIClient{commitThinking: "minimal", generator: generatorFunc(func(ctx context.Context, model string, contents []*genai.Content, opts *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error) {
+		prompt = contents[0].Parts[0].Text
+		if opts.ThinkingConfig == nil {
+			levels = append(levels, "")
+			return response(&genai.Part{Text: "fix: done"}), nil
+		}
+		levels = append(levels, opts.ThinkingConfig.ThinkingLevel)
+		return nil, genai.APIError{Code: 400, Message: "Thinking level is unsupported: THINKING_LEVEL_MINIMAL"}
+	})}
+	got, err := client.GenerateCommitMessage(context.Background(), CommitInput{Diff: "+change", DiffStat: "a.go | 1 +", Branch: "topic", RecentCommits: "feat(ui): add view", Language: "japanese"})
+	if err != nil || got != "fix: done" || len(levels) != 3 || levels[0] != genai.ThinkingLevelMinimal || levels[1] != genai.ThinkingLevelLow || levels[2] != "" {
+		t.Fatalf("got=%q err=%v levels=%v", got, err, levels)
+	}
+	for _, want := range []string{"+change", "a.go | 1 +", "Branch: topic", "feat(ui): add view", "in japanese"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+
+	calls := 0
+	client.generator = generatorFunc(func(context.Context, string, []*genai.Content, *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error) {
+		calls++
+		return nil, genai.APIError{Code: 400, Message: "invalid argument"}
+	})
+	if _, err := client.GenerateCommitMessage(context.Background(), CommitInput{Diff: "+change"}); err == nil || calls != 1 {
+		t.Fatalf("unrelated errors must not be retried: calls=%d err=%v", calls, err)
+	}
+	client.commitThinking = "default"
+	client.generator = generatorFunc(func(ctx context.Context, model string, contents []*genai.Content, opts *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error) {
+		if opts.ThinkingConfig != nil {
+			t.Fatal("default thinking must not override the model")
+		}
+		return response(&genai.Part{Text: "fix: done"}), nil
+	})
+	if _, err := client.GenerateCommitMessage(context.Background(), CommitInput{Diff: "+change"}); err != nil {
+		t.Fatal(err)
 	}
 }

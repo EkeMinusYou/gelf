@@ -70,7 +70,7 @@ vertex_ai:
   location: "global"  # optional, default: global
 
 model:
-  flash: gemini-3-flash-preview
+  flash: gemini-3.8-flash
   pro: gemini-3.1-pro-preview
 
 language: "english"  # optional, default: english
@@ -78,6 +78,7 @@ language: "english"  # optional, default: english
 commit:
   model: "flash"     # optional, default: flash
   language: "english"  # optional, inherits from global language
+  thinking: "minimal"  # optional, default: minimal
 
 pr:
   model: "pro"       # optional, default: pro
@@ -129,6 +130,8 @@ git add .
 ```bash
 gelf commit
 ```
+
+The AI receives the staged diff, its diffstat, the current branch name, and the five most recent commit subjects so that the generated message follows the repository's existing scope and wording style.
 
 3. Interactive TUI operations:
    - Review the AI-generated commit message
@@ -293,7 +296,7 @@ This allows you to set a global default language, override it for specific comma
 - **Commit Target**: Staged changes only (`git diff --staged`)
 - **PR Target**: Committed changes between base branch and `HEAD`
 - **AI Provider**: Vertex AI (Gemini models)
-- **Default Flash Model**: gemini-3-flash-preview
+- **Default Flash Model**: gemini-3.8-flash
 - **Default Pro Model**: gemini-3.1-pro-preview
 - **UI Framework**: Bubble Tea (TUI)
 - **CLI Framework**: Cobra
@@ -362,7 +365,7 @@ vertex_ai:
   location: string       # Vertex AI location (default: global)
 
 model:
-  flash: string          # Gemini Flash model to use (default: gemini-3-flash-preview)
+  flash: string          # Gemini Flash model to use (default: gemini-3.8-flash)
   pro: string            # Gemini Pro model to use (default: gemini-3.1-pro-preview)
 
 language: string         # Global default language (default: english)
@@ -371,6 +374,8 @@ commit:
   model: string          # Model for commits: "flash", "pro", or custom (default: flash)
   language: string       # Language for commit messages (inherits from global if not set)
   max_diff_bytes: number # Maximum staged diff size sent to the AI (default: 100000)
+  thinking: string       # Gemini thinking level for commits: "minimal", "low", "medium", "high", or "default" (default: minimal)
+                         # Unsupported levels fall back automatically (minimal → low → model default), e.g. for Pro or Gemini 2.5
 
 pr:
   model: string          # Model for pull requests: "flash", "pro", or custom (default: pro)
