@@ -20,15 +20,18 @@ import (
 )
 
 type commandAI struct {
-	Input                 ai.PullRequestInput
-	Commit                ai.CommitInput
-	Model                 string
-	Err                   error
+	Input  ai.PullRequestInput
+	Commit ai.CommitInput
+	Model  string
+	Err    error
 }
 
 func (c *commandAI) GenerateCommitMessage(ctx context.Context, input ai.CommitInput) (string, error) {
 	c.Commit = input
 	return "fix: generated message", c.Err
+}
+func (c *commandAI) ReviseCommitMessage(ctx context.Context, input ai.CommitInput, previous, instructions string) (string, error) {
+	return c.GenerateCommitMessage(ctx, input)
 }
 func (c *commandAI) GeneratePullRequestContent(ctx context.Context, input ai.PullRequestInput) (*ai.PullRequestContent, error) {
 	c.Input = input

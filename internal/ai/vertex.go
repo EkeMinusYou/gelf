@@ -40,6 +40,7 @@ type PullRequestContent struct {
 
 type Client interface {
 	GenerateCommitMessage(context.Context, CommitInput) (string, error)
+	ReviseCommitMessage(context.Context, CommitInput, string, string) (string, error)
 	GeneratePullRequestContent(context.Context, PullRequestInput) (*PullRequestContent, error)
 	RevisePullRequestContent(context.Context, PullRequestInput, *PullRequestContent, string) (*PullRequestContent, error)
 }
@@ -81,6 +82,41 @@ func NewVertexAIClient(ctx context.Context, cfg *config.Config, model string) (*
 }
 
 func (v *VertexAIClient) GenerateCommitMessage(ctx context.Context, input CommitInput) (string, error) {
+	prompt := commitPrompt("<task>Write a commit message for the staged changes below.</task>", input, "")
+	text, err := v.generate(ctx, prompt, 0.3, false, v.commitThinking)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate commit message: %w", err)
+	}
+	return text, nil
+}
+
+func (v *VertexAIClient) ReviseCommitMessage(ctx context.Context, input CommitInput, previous, instructions string) (string, error) {
+	if strings.TrimSpace(previous) == "" {
+		return "", fmt.Errorf("previous commit message is required for revision")
+	}
+	if strings.TrimSpace(instructions) == "" {
+		return "", fmt.Errorf("revision instructions are empty")
+	}
+	revision := fmt.Sprintf(`
+
+<current_message>
+%s
+</current_message>
+
+<revision_instructions>
+%s
+</revision_instructions>`, previous, instructions)
+	prompt := commitPrompt(`<task>Revise the current commit message for the staged changes below.
+Apply the revision instructions faithfully and keep everything they do not affect.
+The instructions take precedence over the format and style rules.</task>`, input, revision)
+	text, err := v.generate(ctx, prompt, 0.3, false, v.commitThinking)
+	if err != nil {
+		return "", fmt.Errorf("failed to revise commit message: %w", err)
+	}
+	return text, nil
+}
+
+func commitPrompt(task string, input CommitInput, suffix string) string {
 	recentCommits := input.RecentCommits
 	if recentCommits == "" {
 		recentCommits = "NONE"
@@ -89,7 +125,7 @@ func (v *VertexAIClient) GenerateCommitMessage(ctx context.Context, input Commit
 	if branch == "" {
 		branch = "UNKNOWN"
 	}
-	prompt := fmt.Sprintf(`<task>Write a commit message for the staged changes below.</task>
+	return fmt.Sprintf(`%s
 
 <format>
 - Subject line: <type>[optional scope]: <description>
@@ -121,13 +157,7 @@ Branch: %s
 <recent_commits>
 %s
 </recent_commits>
-</context>`, input.Language, input.DiffStat, input.Diff, branch, recentCommits)
-
-	text, err := v.generate(ctx, prompt, 0.3, false, v.commitThinking)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate commit message: %w", err)
-	}
-	return text, nil
+</context>%s`, task, input.Language, input.DiffStat, input.Diff, branch, recentCommits, suffix)
 }
 
 func (v *VertexAIClient) GeneratePullRequestContent(ctx context.Context, input PullRequestInput) (*PullRequestContent, error) {

@@ -136,10 +136,11 @@ Generated messages have a Conventional Commits subject line and, for material ch
 3. Interactive TUI operations:
    - Review the AI-generated commit message
    - Press `y` to approve or `n` to cancel
-   - Press `e` to edit the commit message (Enter inserts a new line, `Ctrl+S` confirms, `Esc` cancels)
+   - Press `e` to edit the commit message (the cursor starts at the end of the subject line; Enter inserts a new line, `Ctrl+S` confirms, `Esc` cancels)
+   - Press `r` to tell the AI how to revise the message (e.g. "add a body", "write it in Japanese"); `Esc` cancels
    - Press `q` or `Ctrl+C` to cancel during generation
    - The commit will be executed automatically upon approval
-   - Success message displays after TUI exits
+   - Success message with the commit subject displays after TUI exits
 
 ### Pull Request Creation
 

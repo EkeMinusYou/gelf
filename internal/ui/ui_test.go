@@ -16,12 +16,18 @@ import (
 
 type fakeAI struct {
 	commitError  error
+	reviseError  error
 	instructions string
+	revisedFrom  string
 	input        ai.PullRequestInput
 }
 
 func (f *fakeAI) GenerateCommitMessage(ctx context.Context, input ai.CommitInput) (string, error) {
 	return "fix: test", f.commitError
+}
+func (f *fakeAI) ReviseCommitMessage(ctx context.Context, input ai.CommitInput, previous, instructions string) (string, error) {
+	f.revisedFrom, f.instructions = previous, instructions
+	return "fix: revised\n\n- body", f.reviseError
 }
 func (f *fakeAI) GeneratePullRequestContent(ctx context.Context, input ai.PullRequestInput) (*ai.PullRequestContent, error) {
 	f.input = input
@@ -115,6 +121,71 @@ func TestTUIEditingCancellationAndFullSummary(t *testing.T) {
 	_, quit := tui.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if quit == nil {
 		t.Fatal("Ctrl+C in editing did not quit")
+	}
+}
+
+func TestTUIEditingStartsOnSubjectLine(t *testing.T) {
+	session := NewSession(context.Background(), strings.NewReader(""), io.Discard, io.Discard, false, false)
+	tui := NewTUI(session, &fakeAI{}, ai.CommitInput{}, git.DiffSummary{}, nil)
+	defer tui.cancel()
+	tui.Update(msgCommitGenerated{message: "fix: subject\n\n- first\n- second"})
+	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
+	tui.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if tui.commitMessage != "fix: subject!\n\n- first\n- second" {
+		t.Fatalf("edit did not start at the end of the subject: %q", tui.commitMessage)
+	}
+}
+
+func TestTUIRevisionKeepsMessageOnFailure(t *testing.T) {
+	session := NewSession(context.Background(), strings.NewReader(""), io.Discard, io.Discard, false, false)
+	client := &fakeAI{}
+	tui := NewTUI(session, client, ai.CommitInput{Diff: "diff"}, git.DiffSummary{}, nil)
+	defer tui.cancel()
+	tui.Update(msgCommitGenerated{message: "fix: original"})
+	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	tui.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if tui.state != stateConfirm {
+		t.Fatal("empty instructions should return to confirmation")
+	}
+	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("add a body")})
+	_, cmd := tui.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if tui.state != stateLoading || !strings.Contains(tui.View(), "Revising") || cmd == nil {
+		t.Fatalf("revision did not start: state=%v", tui.state)
+	}
+	tui.Update(tui.reviseCommitMessage("add a body")())
+	if tui.commitMessage != "fix: revised\n\n- body" || tui.state != stateConfirm || client.revisedFrom != "fix: original" || client.instructions != "add a body" {
+		t.Fatalf("revision=%q state=%v client=%+v", tui.commitMessage, tui.state, client)
+	}
+	client.reviseError = errors.New("quota")
+	tui.Update(tui.reviseCommitMessage("again")())
+	if tui.commitMessage != "fix: revised\n\n- body" || tui.state != stateConfirm || !strings.Contains(tui.View(), "quota") {
+		t.Fatalf("failed revision should keep the message: %q state=%v", tui.commitMessage, tui.state)
+	}
+	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if strings.Contains(tui.View(), "quota") {
+		t.Fatal("revision error should clear on the next key")
+	}
+}
+
+func TestTUISuccessShowsOnlySubject(t *testing.T) {
+	var out bytes.Buffer
+	session := NewSession(context.Background(), strings.NewReader(""), &out, io.Discard, false, false)
+	var committed string
+	tui := NewTUI(session, &fakeAI{}, ai.CommitInput{}, git.DiffSummary{}, func(_ context.Context, message string) error { committed = message; return nil })
+	filter := tea.WithFilter(func(model tea.Model, msg tea.Msg) tea.Msg {
+		if _, ok := msg.(msgCommitGenerated); ok {
+			model.Update(msgCommitGenerated{message: "fix: subject\n\n- body"})
+			return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}}
+		}
+		return msg
+	})
+	if err := tui.Run(tea.WithoutRenderer(), filter); err != nil {
+		t.Fatal(err)
+	}
+	if committed != "fix: subject\n\n- body" || !strings.Contains(out.String(), "fix: subject") || strings.Contains(out.String(), "- body") {
+		t.Fatalf("committed=%q output=%q", committed, out.String())
 	}
 }
 

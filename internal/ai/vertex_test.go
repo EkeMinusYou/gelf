@@ -126,6 +126,23 @@ func TestGenerationPropagatesCancellation(t *testing.T) {
 	}
 }
 
+func TestReviseCommitMessageIncludesCurrentMessageAndInstructions(t *testing.T) {
+	var prompt string
+	client := &VertexAIClient{generator: generatorFunc(func(ctx context.Context, model string, contents []*genai.Content, opts *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error) {
+		prompt = contents[0].Parts[0].Text
+		return response(&genai.Part{Text: "fix: revised"}), nil
+	})}
+	got, err := client.ReviseCommitMessage(context.Background(), CommitInput{Diff: "+change"}, "fix: original", "add a body")
+	if err != nil || got != "fix: revised" || !strings.Contains(prompt, "+change") || !strings.Contains(prompt, "<current_message>\nfix: original") || !strings.Contains(prompt, "add a body") {
+		t.Fatalf("got=%q err=%v prompt=%s", got, err, prompt)
+	}
+	for _, args := range [][2]string{{"", "add a body"}, {"fix: original", " "}} {
+		if _, err := client.ReviseCommitMessage(context.Background(), CommitInput{}, args[0], args[1]); err == nil {
+			t.Fatalf("invalid revision accepted: %q", args)
+		}
+	}
+}
+
 func TestCommitThinkingLevelFallsBackWhenUnsupported(t *testing.T) {
 	var levels []genai.ThinkingLevel
 	var prompt string
