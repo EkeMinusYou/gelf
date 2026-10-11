@@ -134,7 +134,7 @@ gelf commit
 Generated messages have a Conventional Commits subject line and, for material changes, a body separated by a blank line. The AI receives the staged diff, its diffstat, the current branch name, and the five most recent commit subjects so that the generated message follows the repository's existing scope and wording style.
 
 3. Interactive TUI operations:
-   - Review the AI-generated commit message (Conventional Commits types such as `feat` and `chore` are color-coded)
+   - Review the AI-generated commit message (Conventional Commits types such as `feat` and `chore` are color-coded; breaking changes marked with `!` or a `BREAKING CHANGE:` footer are shown in white on red)
    - Press `y` to approve or `n` to cancel
    - Press `e` to edit the commit message in your editor (the same one git uses: `GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`, then `vi`). Save and quit to apply; lines starting with `#` are ignored, and an empty message keeps the previous one
    - Press `p` to give the AI a prompt for refining the message (e.g. "add a body", "write it in Japanese"); `Esc` cancels

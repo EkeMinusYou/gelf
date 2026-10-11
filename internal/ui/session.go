@@ -19,6 +19,8 @@ import (
 type Styles struct {
 	Title, Message, Prompt, Success, Error, Loading, EditPrompt lipgloss.Style
 	Diff, File, Added, Deleted, Subtle, URL                     lipgloss.Style
+	// Breaking marks breaking changes ("feat!:" or a BREAKING CHANGE footer).
+	Breaking lipgloss.Style
 	// CommitTypes colors Conventional Commits prefixes such as "feat(ui):".
 	CommitTypes map[string]lipgloss.Style
 }
@@ -43,6 +45,7 @@ func NewStyles(color bool) Styles {
 		Deleted:    renderer.NewStyle().Foreground(lipgloss.Color("1")),
 		Subtle:     renderer.NewStyle().Foreground(lipgloss.Color("8")),
 		URL:        renderer.NewStyle().Underline(true).Foreground(lipgloss.Color("4")),
+		Breaking:   renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("1")),
 		CommitTypes: map[string]lipgloss.Style{
 			"feat":     renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("2")),
 			"fix":      renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("1")),
@@ -59,27 +62,40 @@ func NewStyles(color bool) Styles {
 	}
 }
 
-var conventionalPrefix = regexp.MustCompile(`^([A-Za-z]+)(\([^)]*\))?!?:`)
+var (
+	conventionalPrefix = regexp.MustCompile(`^([A-Za-z]+)(\([^)]*\))?(!)?:`)
+	breakingFooter     = regexp.MustCompile(`(?m)^BREAKING[ -]CHANGE:`)
+)
 
 // formatSubject colors a Conventional Commits prefix by type and renders the rest with rest.
 func formatSubject(subject string, styles Styles, rest lipgloss.Style) string {
+	return formatSubjectWith(subject, styles, rest, false)
+}
+
+// formatSubjectWith highlights the prefix as breaking when it has "!" or breaking is set.
+func formatSubjectWith(subject string, styles Styles, rest lipgloss.Style, breaking bool) string {
 	match := conventionalPrefix.FindStringSubmatchIndex(subject)
 	if match == nil {
 		return rest.Render(subject)
+	}
+	prefix := subject[:match[1]]
+	if breaking || match[6] >= 0 {
+		return styles.Breaking.Render(prefix) + rest.Render(subject[match[1]:])
 	}
 	style, ok := styles.CommitTypes[strings.ToLower(subject[match[2]:match[3]])]
 	if !ok {
 		return rest.Render(subject)
 	}
-	return style.Render(subject[:match[1]]) + rest.Render(subject[match[1]:])
+	return style.Render(prefix) + rest.Render(subject[match[1]:])
 }
 
-// formatCommitMessage highlights the subject line and leaves the body plain.
+// formatCommitMessage highlights the subject line and breaking-change footers, leaving the rest of the body plain.
 func formatCommitMessage(message string, styles Styles) string {
 	subject, body, hasBody := strings.Cut(message, "\n")
-	formatted := formatSubject(subject, styles, styles.Message)
+	breaking := hasBody && breakingFooter.MatchString(body)
+	formatted := formatSubjectWith(subject, styles, styles.Message, breaking)
 	if hasBody {
-		formatted += "\n" + body
+		formatted += "\n" + breakingFooter.ReplaceAllStringFunc(body, func(footer string) string { return styles.Breaking.Render(footer) })
 	}
 	return formatted
 }

@@ -181,6 +181,20 @@ func TestCommitTypeColors(t *testing.T) {
 	if !strings.Contains(feat, "feat(ui)!:") || !strings.Contains(feat, "\x1b[") || strings.SplitN(feat, "feat", 2)[0] == strings.SplitN(fix, "fix", 2)[0] {
 		t.Fatalf("feat and fix should have distinct colors: %q %q", feat, fix)
 	}
+	breaking := colored.Breaking.Render("feat(api)!:")
+	if got := formatSubject("feat(api)!: drop v1", colored, colored.Message); !strings.HasPrefix(got, breaking) {
+		t.Fatalf("breaking subject not highlighted: %q", got)
+	}
+	footer := formatCommitMessage("feat(api): drop v1\n\nBREAKING CHANGE: v1 is gone", colored)
+	if !strings.HasPrefix(footer, colored.Breaking.Render("feat(api):")) || !strings.Contains(footer, colored.Breaking.Render("BREAKING CHANGE:")+" v1 is gone") {
+		t.Fatalf("breaking footer not highlighted: %q", footer)
+	}
+	if strings.HasPrefix(formatSubject("feat: x", colored, colored.Message), colored.Breaking.Render("feat:")) {
+		t.Fatal("non-breaking subject highlighted as breaking")
+	}
+	if got := formatCommitMessage("feat!: x\n\nBREAKING CHANGE: y", plain); got != "feat!: x\n\nBREAKING CHANGE: y" {
+		t.Fatalf("plain breaking message styled: %q", got)
+	}
 	if got := formatSubject("feat(ui): add view", plain, plain.Message); got != "feat(ui): add view" {
 		t.Fatalf("plain output styled: %q", got)
 	}
