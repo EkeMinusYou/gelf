@@ -134,10 +134,10 @@ gelf commit
 Generated messages have a Conventional Commits subject line and, for material changes, a body separated by a blank line. The AI receives the staged diff, its diffstat, the current branch name, and the five most recent commit subjects so that the generated message follows the repository's existing scope and wording style.
 
 3. Interactive TUI operations:
-   - Review the AI-generated commit message
+   - Review the AI-generated commit message (Conventional Commits types such as `feat` and `chore` are color-coded)
    - Press `y` to approve or `n` to cancel
-   - Press `e` to edit the commit message (the cursor starts at the end of the subject line; Enter inserts a new line, `Ctrl+S` confirms, `Esc` cancels)
-   - Press `r` to tell the AI how to revise the message (e.g. "add a body", "write it in Japanese"); `Esc` cancels
+   - Press `e` to edit the commit message in your editor (the same one git uses: `GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`, then `vi`). Save and quit to apply; lines starting with `#` are ignored, and an empty message keeps the previous one
+   - Press `p` to give the AI a prompt for refining the message (e.g. "add a body", "write it in Japanese"); `Esc` cancels
    - Press `q` or `Ctrl+C` to cancel during generation
    - The commit will be executed automatically upon approval
    - Success message with the commit subject displays after TUI exits
@@ -163,7 +163,8 @@ Only open PRs (including drafts) with the exact head repository and branch count
 After the PR title and description are generated, the interactive prompt lets you:
 
 - Press `y` to create the pull request with the generated content
-- Press `r` to enter chat-style revision instructions (e.g. "shorten the title", "clarify the summary in Japanese"). gelf re-generates the title/body using your feedback and asks again — repeat as many times as you like.
+- Press `e` to edit the title and body in your editor (the first line is the title, the rest is the body)
+- Press `p` to enter a chat-style prompt (e.g. "shorten the title", "clarify the summary in Japanese"). gelf re-generates the title/body using your feedback and asks again — repeat as many times as you like.
 - Press `n` (or `Esc` / `q`) to cancel without creating a PR
 
 Options:

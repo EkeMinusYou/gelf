@@ -262,9 +262,9 @@ func ensureBranchPushed(ctx context.Context, repo *git.Repository, status git.Pu
 
 func generatePR(client ai.Client, pr *prContext, opts prOptions, session *ui.Session) (*ai.PullRequestContent, bool, error) {
 	if !opts.DryRun && !opts.Yes {
-		prompt := "Create this pull request? (y)es / (r)evise / (n)o"
+		prompt := "Create this pull request? (y)es / (e)dit / (p)rompt / (n)o"
 		if opts.Update {
-			prompt = "Update this pull request? (y)es / (r)evise / (n)o"
+			prompt = "Update this pull request? (y)es / (e)dit / (p)rompt / (n)o"
 		}
 		return ui.NewPRTUI(session, client, pr.Input, pr.Summary, opts.Render, prompt).Run()
 	}

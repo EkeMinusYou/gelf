@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,8 @@ import (
 type Styles struct {
 	Title, Message, Prompt, Success, Error, Loading, EditPrompt lipgloss.Style
 	Diff, File, Added, Deleted, Subtle, URL                     lipgloss.Style
+	// CommitTypes colors Conventional Commits prefixes such as "feat(ui):".
+	CommitTypes map[string]lipgloss.Style
 }
 
 func NewStyles(color bool) Styles {
@@ -40,7 +43,50 @@ func NewStyles(color bool) Styles {
 		Deleted:    renderer.NewStyle().Foreground(lipgloss.Color("1")),
 		Subtle:     renderer.NewStyle().Foreground(lipgloss.Color("8")),
 		URL:        renderer.NewStyle().Underline(true).Foreground(lipgloss.Color("4")),
+		CommitTypes: map[string]lipgloss.Style{
+			"feat":     renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("2")),
+			"fix":      renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("1")),
+			"docs":     renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("4")),
+			"style":    renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("13")),
+			"refactor": renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("6")),
+			"perf":     renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("3")),
+			"test":     renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("5")),
+			"build":    renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
+			"ci":       renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("14")),
+			"chore":    renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("8")),
+			"revert":   renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("9")),
+		},
 	}
+}
+
+var conventionalPrefix = regexp.MustCompile(`^([A-Za-z]+)(\([^)]*\))?!?:`)
+
+// formatSubject colors a Conventional Commits prefix by type and renders the rest with rest.
+func formatSubject(subject string, styles Styles, rest lipgloss.Style) string {
+	match := conventionalPrefix.FindStringSubmatchIndex(subject)
+	if match == nil {
+		return rest.Render(subject)
+	}
+	style, ok := styles.CommitTypes[strings.ToLower(subject[match[2]:match[3]])]
+	if !ok {
+		return rest.Render(subject)
+	}
+	return style.Render(subject[:match[1]]) + rest.Render(subject[match[1]:])
+}
+
+// formatCommitMessage highlights the subject line and leaves the body plain.
+func formatCommitMessage(message string, styles Styles) string {
+	subject, body, hasBody := strings.Cut(message, "\n")
+	formatted := formatSubject(subject, styles, styles.Message)
+	if hasBody {
+		formatted += "\n" + body
+	}
+	return formatted
+}
+
+// FormatCommitMessage renders a commit message for this session's output.
+func (s *Session) FormatCommitMessage(message string) string {
+	return formatCommitMessage(message, s.Styles)
 }
 
 type Session struct {

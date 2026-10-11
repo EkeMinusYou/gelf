@@ -14,7 +14,7 @@ func (s *Session) RenderPRSuccess(header, title, suffix, url string) string {
 	if suffix != "" {
 		headerLine = fmt.Sprintf("%s %s", headerLine, s.Styles.Subtle.Render(suffix))
 	}
-	lines := []string{headerLine, "  " + s.Styles.Message.Render(title)}
+	lines := []string{headerLine, "  " + formatSubject(title, s.Styles, s.Styles.Message)}
 	if strings.TrimSpace(url) != "" {
 		lines = append(lines, fmt.Sprintf("↳ %s", s.Styles.URL.Render(url)))
 	}

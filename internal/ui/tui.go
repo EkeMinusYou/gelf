@@ -8,7 +8,6 @@ import (
 	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/git"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -19,28 +18,26 @@ const (
 	stateLoading state = iota
 	stateConfirm
 	stateEditing
-	stateRevising
+	statePrompting
 	stateCommitting
 	stateSuccess
 	stateError
 )
 
 type model struct {
-	session         *Session
-	styles          Styles
-	ctx             context.Context
-	cancel          context.CancelFunc
-	commit          func(context.Context, string) error
-	aiClient        ai.Client
-	input           ai.CommitInput
-	diffSummary     git.DiffSummary
-	commitMessage   string
-	originalMessage string
-	err             error
-	state           state
-	spinner         spinner.Model
-	textArea        textarea.Model
-	revisionInput   textinput.Model
+	session       *Session
+	styles        Styles
+	ctx           context.Context
+	cancel        context.CancelFunc
+	commit        func(context.Context, string) error
+	aiClient      ai.Client
+	input         ai.CommitInput
+	diffSummary   git.DiffSummary
+	commitMessage string
+	err           error
+	state         state
+	spinner       spinner.Model
+	revisionInput textinput.Model
 	// revising marks the loading state as a revision, whose failure returns to confirmation.
 	revising bool
 	notice   string
@@ -52,6 +49,11 @@ type msgCommitGenerated struct {
 	revision bool
 }
 
+type msgEdited struct {
+	edit *editSession
+	err  error
+}
+
 type msgCommitDone struct {
 	err error
 }
@@ -61,12 +63,6 @@ func NewTUI(session *Session, aiClient ai.Client, input ai.CommitInput, summary 
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = session.Styles.Loading
-
-	ta := textarea.New()
-	ta.Placeholder = "Enter your commit message..."
-	ta.ShowLineNumbers = false
-	ta.CharLimit = 0
-	ta.SetWidth(80)
 
 	ri := textinput.New()
 	ri.Placeholder = "e.g. mention the config change in the body"
@@ -80,7 +76,6 @@ func NewTUI(session *Session, aiClient ai.Client, input ai.CommitInput, summary 
 		diffSummary:   summary,
 		state:         stateLoading,
 		spinner:       s,
-		textArea:      ta,
 		revisionInput: ri,
 	}
 }
@@ -110,42 +105,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = stateCommitting
 				return m, tea.Batch(m.spinner.Tick, m.commitChanges())
 			case "e", "E":
-				m.originalMessage = m.commitMessage
-				// Leave room to add a body below a subject-only message.
-				m.textArea.SetHeight(min(max(strings.Count(m.commitMessage, "\n")+3, 5), 15))
-				m.textArea.SetValue(m.commitMessage)
-				// SetValue leaves the cursor at the end; start on the subject line instead.
-				for m.textArea.Line() > 0 {
-					m.textArea.CursorUp()
+				edit, err := newEditSession(m.ctx, "COMMIT_EDITMSG", commitEditContent(m.commitMessage))
+				if err != nil {
+					m.notice = fmt.Sprintf("✗ Failed to open editor: %v", err)
+					return m, nil
 				}
-				m.textArea.CursorEnd()
 				m.state = stateEditing
-				return m, m.textArea.Focus()
-			case "r", "R":
+				return m, tea.ExecProcess(edit.cmd, func(err error) tea.Msg { return msgEdited{edit: edit, err: err} })
+			case "p", "P":
 				m.revisionInput.SetValue("")
-				m.state = stateRevising
+				m.state = statePrompting
 				return m, m.revisionInput.Focus()
 			case "n", "N", "q", "ctrl+c":
 				return m, tea.Quit
 			}
-		case stateEditing:
-			switch msg.String() {
-			case "ctrl+s":
-				m.commitMessage = strings.TrimSpace(m.textArea.Value())
-				if m.commitMessage == "" {
-					m.commitMessage = m.originalMessage
-				}
-				m.textArea.Blur()
-				m.state = stateConfirm
-			case "esc":
-				m.commitMessage = m.originalMessage
-				m.textArea.Blur()
-				m.state = stateConfirm
-			default:
-				m.textArea, cmd = m.textArea.Update(msg)
-				return m, cmd
-			}
-		case stateRevising:
+		case statePrompting:
 			switch msg.String() {
 			case "enter":
 				instructions := strings.TrimSpace(m.revisionInput.Value())
@@ -171,7 +145,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.revising = false
 		if msg.err != nil && msg.revision {
 			// Keep the current message so a failed revision can be retried or approved.
-			m.notice = fmt.Sprintf("✗ Failed to revise commit message: %v", msg.err)
+			m.notice = fmt.Sprintf("✗ Failed to apply the prompt; kept the previous message: %v", msg.err)
 			m.state = stateConfirm
 		} else if msg.err != nil {
 			m.err = msg.err
@@ -181,6 +155,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.commitMessage = msg.message
 			m.state = stateConfirm
 		}
+
+	case msgEdited:
+		m.applyEdit(msg)
 
 	case msgCommitDone:
 		if msg.err != nil {
@@ -206,7 +183,7 @@ func (m *model) View() string {
 	case stateLoading:
 		status := "Generating commit message..."
 		if m.revising {
-			status = "Revising commit message..."
+			status = "Applying your prompt..."
 		}
 		loadingText := fmt.Sprintf("%s %s", m.spinner.View(), m.styles.Loading.Render(status))
 
@@ -219,8 +196,8 @@ func (m *model) View() string {
 	case stateConfirm:
 		diffSummary := m.formatDiffSummary()
 		header := m.styles.Title.Render("📝 Generated Commit Message:")
-		message := m.styles.Message.Render(m.commitMessage)
-		prompt := m.styles.Prompt.Render("Commit this message? (y)es / (e)dit / (r)evise / (n)o")
+		message := formatCommitMessage(m.commitMessage, m.styles)
+		prompt := m.styles.Prompt.Render("Commit this message? (y)es / (e)dit / (p)rompt / (n)o")
 		if m.notice != "" {
 			prompt = m.styles.Error.Render(m.notice) + "\n\n" + prompt
 		}
@@ -231,22 +208,14 @@ func (m *model) View() string {
 		return fmt.Sprintf("%s\n\n%s\n\n%s", header, message, prompt)
 
 	case stateEditing:
-		diffSummary := m.formatDiffSummary()
-		header := m.styles.Title.Render("✏️  Edit Commit Message:")
-		inputView := m.textArea.View()
-		prompt := m.styles.EditPrompt.Render("Enter for a new line, Ctrl+S to confirm, Esc to cancel")
+		return m.styles.EditPrompt.Render("✏️  Waiting for the editor to close...")
 
-		if diffSummary != "" {
-			return fmt.Sprintf("%s\n\n%s\n\n%s\n\n%s", diffSummary, header, inputView, prompt)
-		}
-		return fmt.Sprintf("%s\n\n%s\n\n%s", header, inputView, prompt)
-
-	case stateRevising:
+	case statePrompting:
 		diffSummary := m.formatDiffSummary()
 		header := m.styles.Title.Render("📝 Current Commit Message:")
-		message := m.styles.Message.Render(m.commitMessage)
-		question := m.styles.Title.Render("💬 Tell me how to revise the commit message:")
-		prompt := m.styles.EditPrompt.Render("Press Enter to revise, Esc to cancel")
+		message := formatCommitMessage(m.commitMessage, m.styles)
+		question := m.styles.Title.Render("💬 Enter a prompt to refine the commit message:")
+		prompt := m.styles.EditPrompt.Render("Press Enter to send, Esc to cancel")
 		view := fmt.Sprintf("%s\n\n%s\n\n%s\n%s\n\n%s", header, message, question, m.revisionInput.View(), prompt)
 		if diffSummary != "" {
 			return fmt.Sprintf("%s\n\n%s", diffSummary, view)
@@ -279,6 +248,26 @@ func (m *model) generateCommitMessage() tea.Cmd {
 	})
 }
 
+// applyEdit keeps the current message when the editor fails or the result is empty.
+func (m *model) applyEdit(msg msgEdited) {
+	defer msg.edit.cleanup()
+	m.state = stateConfirm
+	if msg.err != nil {
+		m.notice = fmt.Sprintf("✗ Editor failed; kept the previous message: %v", msg.err)
+		return
+	}
+	content, err := msg.edit.content()
+	if err != nil {
+		m.notice = fmt.Sprintf("✗ %v", err)
+		return
+	}
+	if edited := parseCommitEdit(content); edited != "" {
+		m.commitMessage = edited
+	} else {
+		m.notice = "Empty message; kept the previous one"
+	}
+}
+
 func (m *model) reviseCommitMessage(instructions string) tea.Cmd {
 	previous := m.commitMessage
 	return tea.Cmd(func() tea.Msg {
@@ -308,7 +297,7 @@ func (m *model) Run(options ...tea.ProgramOption) error {
 	if m.state == stateSuccess {
 		header := m.styles.Success.Render("✓ Commit successful")
 		subject, _, _ := strings.Cut(m.commitMessage, "\n")
-		message := m.styles.Message.Render(subject)
+		message := formatSubject(subject, m.styles, m.styles.Message)
 
 		fmt.Fprintf(m.session.Out, "%s\n%s\n", header, message)
 	}

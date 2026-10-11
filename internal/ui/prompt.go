@@ -14,7 +14,8 @@ type PRChoice int
 const (
 	PRChoiceNone PRChoice = iota
 	PRChoiceYes
-	PRChoiceRevise
+	PRChoicePrompt
+	PRChoiceEdit
 	PRChoiceNo
 )
 
@@ -112,8 +113,10 @@ func (s *Session) PRChoice(prompt string) (PRChoice, error) {
 	switch strings.ToLower(line) {
 	case "y", "yes":
 		return PRChoiceYes, nil
-	case "r", "revise":
-		return PRChoiceRevise, nil
+	case "p", "prompt":
+		return PRChoicePrompt, nil
+	case "e", "edit":
+		return PRChoiceEdit, nil
 	default:
 		return PRChoiceNo, nil
 	}
@@ -135,8 +138,11 @@ func (m *prChoiceModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "y", "Y":
 			m.choice = PRChoiceYes
 			return m, tea.Quit
-		case "r", "R":
-			m.choice = PRChoiceRevise
+		case "p", "P":
+			m.choice = PRChoicePrompt
+			return m, tea.Quit
+		case "e", "E":
+			m.choice = PRChoiceEdit
 			return m, tea.Quit
 		case "n", "N", "q", "Q", "ctrl+c", "ctrl+d", "esc":
 			m.choice = PRChoiceNo

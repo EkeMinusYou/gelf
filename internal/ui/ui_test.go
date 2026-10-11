@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +42,7 @@ func (f *fakeAI) RevisePullRequestContent(ctx context.Context, input ai.PullRequ
 
 func TestPipedPRRevisionKeepsAllInputAndSummary(t *testing.T) {
 	var out bytes.Buffer
-	session := NewSession(context.Background(), strings.NewReader("r\nshorten title\ny\n"), &out, io.Discard, false, false)
+	session := NewSession(context.Background(), strings.NewReader("p\nshorten title\ny\n"), &out, io.Discard, false, false)
 	client := &fakeAI{}
 	summary := git.DiffSummary{Files: []git.FileDiff{{Name: "first.txt"}, {Name: "日本語.txt", AddedLines: 2}}}
 	tui := NewPRTUI(session, client, ai.PullRequestInput{Diff: "truncated diff"}, summary, false, "")
@@ -51,11 +53,11 @@ func TestPipedPRRevisionKeepsAllInputAndSummary(t *testing.T) {
 }
 
 func TestPromptSequenceAndEOF(t *testing.T) {
-	session := NewSession(context.Background(), strings.NewReader("yes\nr\nrevision\ny\n"), io.Discard, io.Discard, false, false)
+	session := NewSession(context.Background(), strings.NewReader("yes\np\nrevision\ny\n"), io.Discard, io.Discard, false, false)
 	if ok, err := session.YesNo("push"); err != nil || !ok {
 		t.Fatalf("push=%v %v", ok, err)
 	}
-	if choice, err := session.PRChoice("choice"); err != nil || choice != PRChoiceRevise {
+	if choice, err := session.PRChoice("choice"); err != nil || choice != PRChoicePrompt {
 		t.Fatalf("choice=%v %v", choice, err)
 	}
 	if line, ok, err := session.Line("revision", ""); err != nil || !ok || line != "revision" {
@@ -95,45 +97,95 @@ func TestTUIPropagatesGenerationAndCommitErrors(t *testing.T) {
 	}
 }
 
-func TestTUIEditingCancellationAndFullSummary(t *testing.T) {
+// fakeEditor makes git and gelf use a script that runs script against the edited file.
+func fakeEditor(t *testing.T, script string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "editor")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_EDITOR", path)
+}
+
+func TestTUIEditingAppliesEditorResult(t *testing.T) {
 	session := NewSession(context.Background(), strings.NewReader(""), io.Discard, io.Discard, false, false)
 	tui := NewTUI(session, &fakeAI{}, ai.CommitInput{Diff: "truncated", Language: "english"}, git.DiffSummary{Files: []git.FileDiff{{Name: "later.txt", AddedLines: 3}}}, nil)
 	defer tui.cancel()
-	tui.Update(msgCommitGenerated{message: "original"})
-	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	tui.textArea.SetValue("edited")
-	tui.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if tui.commitMessage != "original" || tui.state != stateConfirm || !strings.Contains(tui.View(), "later.txt (+3)") {
-		t.Fatal("editing or full summary incorrect")
+	tui.Update(msgCommitGenerated{message: "fix: original"})
+	if !strings.Contains(tui.View(), "later.txt (+3)") {
+		t.Fatal("full summary missing")
 	}
-	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	tui.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	tui.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("- body")})
-	if tui.state != stateEditing {
-		t.Fatal("Enter must insert a newline while editing")
+	edit := func(script string, runErr error) {
+		t.Helper()
+		fakeEditor(t, script)
+		session, err := newEditSession(context.Background(), "COMMIT_EDITMSG", commitEditContent(tui.commitMessage))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := session.cmd.Run(); err != nil {
+			t.Fatal(err)
+		}
+		tui.state = stateEditing
+		tui.Update(msgEdited{edit: session, err: runErr})
+		if tui.state != stateConfirm {
+			t.Fatalf("state=%v", tui.state)
+		}
+		if _, err := os.Stat(session.dir); !os.IsNotExist(err) {
+			t.Fatal("temporary file was not removed")
+		}
 	}
-	tui.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
-	if tui.commitMessage != "original\n\n- body" || tui.state != stateConfirm {
-		t.Fatalf("multi-line edit=%q state=%v", tui.commitMessage, tui.state)
+	// The editor sees the message with git-style help comments, which are stripped.
+	edit(`grep -q "^# Lines starting with '#' are ignored" "$1" && printf 'feat: edited\n\n- body  \n# note\n' > "$1"`, nil)
+	if tui.commitMessage != "feat: edited\n\n- body" {
+		t.Fatalf("edited=%q", tui.commitMessage)
 	}
-	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	_, quit := tui.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	if quit == nil {
-		t.Fatal("Ctrl+C in editing did not quit")
+	edit(`printf '# only comments\n\n' > "$1"`, nil)
+	if tui.commitMessage != "feat: edited\n\n- body" || !strings.Contains(tui.View(), "kept the previous one") {
+		t.Fatalf("empty edit replaced the message: %q", tui.commitMessage)
+	}
+	edit(`printf 'fix: ignored\n' > "$1"`, errors.New("exit status 1"))
+	if tui.commitMessage != "feat: edited\n\n- body" || !strings.Contains(tui.View(), "Editor failed") {
+		t.Fatalf("failed editor replaced the message: %q", tui.commitMessage)
 	}
 }
 
-func TestTUIEditingStartsOnSubjectLine(t *testing.T) {
-	session := NewSession(context.Background(), strings.NewReader(""), io.Discard, io.Discard, false, false)
-	tui := NewTUI(session, &fakeAI{}, ai.CommitInput{}, git.DiffSummary{}, nil)
-	defer tui.cancel()
-	tui.Update(msgCommitGenerated{message: "fix: subject\n\n- first\n- second"})
-	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
-	tui.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
-	if tui.commitMessage != "fix: subject!\n\n- first\n- second" {
-		t.Fatalf("edit did not start at the end of the subject: %q", tui.commitMessage)
+func TestPREditParsing(t *testing.T) {
+	original := &ai.PullRequestContent{Title: "feat: title", Body: "## Summary\n\nbody"}
+	parsed, err := parsePREdit(prEditContent(original))
+	if err != nil || *parsed != *original {
+		t.Fatalf("round trip=%+v %v", parsed, err)
+	}
+	for _, content := range []string{"", "title only\n", "\n\n"} {
+		if _, err := parsePREdit(content); err == nil {
+			t.Fatalf("invalid edit accepted: %q", content)
+		}
+	}
+	if parsed, err := parsePREdit("\n\nnew title\nbody"); err != nil || parsed.Title != "new title" || parsed.Body != "body" {
+		t.Fatalf("leading blank lines: %+v %v", parsed, err)
+	}
+}
+
+func TestPipedPREditRequiresTerminal(t *testing.T) {
+	var stderr bytes.Buffer
+	session := NewSession(context.Background(), strings.NewReader("e\ny\n"), io.Discard, &stderr, false, false)
+	content, confirmed, err := NewPRTUI(session, &fakeAI{}, ai.PullRequestInput{}, git.DiffSummary{}, false, "").Run()
+	if err != nil || !confirmed || content.Title != "original" || !strings.Contains(stderr.String(), "interactive terminal") {
+		t.Fatalf("content=%+v confirmed=%v err=%v stderr=%q", content, confirmed, err, stderr.String())
+	}
+}
+
+func TestCommitTypeColors(t *testing.T) {
+	colored, plain := NewStyles(true), NewStyles(false)
+	feat := formatSubject("feat(ui)!: add view", colored, colored.Message)
+	fix := formatSubject("fix: bug", colored, colored.Message)
+	if !strings.Contains(feat, "feat(ui)!:") || !strings.Contains(feat, "\x1b[") || strings.SplitN(feat, "feat", 2)[0] == strings.SplitN(fix, "fix", 2)[0] {
+		t.Fatalf("feat and fix should have distinct colors: %q %q", feat, fix)
+	}
+	if got := formatSubject("feat(ui): add view", plain, plain.Message); got != "feat(ui): add view" {
+		t.Fatalf("plain output styled: %q", got)
+	}
+	if got := formatCommitMessage("unknown: x\n\nbody", plain); got != "unknown: x\n\nbody" {
+		t.Fatalf("plain message changed: %q", got)
 	}
 }
 
@@ -143,15 +195,15 @@ func TestTUIRevisionKeepsMessageOnFailure(t *testing.T) {
 	tui := NewTUI(session, client, ai.CommitInput{Diff: "diff"}, git.DiffSummary{}, nil)
 	defer tui.cancel()
 	tui.Update(msgCommitGenerated{message: "fix: original"})
-	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	tui.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if tui.state != stateConfirm {
 		t.Fatal("empty instructions should return to confirmation")
 	}
-	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("add a body")})
 	_, cmd := tui.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if tui.state != stateLoading || !strings.Contains(tui.View(), "Revising") || cmd == nil {
+	if tui.state != stateLoading || !strings.Contains(tui.View(), "Applying your prompt") || cmd == nil {
 		t.Fatalf("revision did not start: state=%v", tui.state)
 	}
 	tui.Update(tui.reviseCommitMessage("add a body")())

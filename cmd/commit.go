@@ -94,7 +94,7 @@ func runCommit(cmd *cobra.Command, opts commitOptions, deps dependencies) error 
 			_, err = fmt.Fprint(session.Out, message)
 			return err
 		}
-		fmt.Fprintf(session.Out, "Generated commit message:\n%s\n\n", message)
+		fmt.Fprintf(session.Out, "Generated commit message:\n%s\n\n", session.FormatCommitMessage(message))
 		if err := deps.Git.Commit(ctx, message); err != nil {
 			return fmt.Errorf("failed to commit changes: %w", err)
 		}
