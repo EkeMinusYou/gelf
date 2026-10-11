@@ -13,6 +13,7 @@ import (
 	"github.com/EkeMinusYou/gelf/internal/git"
 	"github.com/EkeMinusYou/gelf/internal/github"
 	"github.com/EkeMinusYou/gelf/internal/process"
+	"github.com/EkeMinusYou/gelf/internal/sessionlog"
 	"github.com/spf13/cobra"
 )
 
@@ -20,16 +21,18 @@ import (
 var version = "dev"
 
 type dependencies struct {
-	Git        *git.Repository
-	GitHub     *github.Client
-	LoadConfig func() (*config.Config, error)
-	NewAI      func(context.Context, *config.Config, string) (ai.Client, error)
+	Git          *git.Repository
+	GitHub       *github.Client
+	LoadConfig   func() (*config.Config, error)
+	NewAI        func(context.Context, *config.Config, string) (ai.Client, error)
+	FindSessions func(context.Context, string, string, sessionlog.Options) (sessionlog.Result, error)
 }
 
 func defaultDependencies() dependencies {
 	runner := process.CommandRunner{}
 	return dependencies{
 		Git: &git.Repository{Runner: runner}, GitHub: github.NewClient(runner), LoadConfig: config.Load,
+		FindSessions: sessionlog.Discover,
 		NewAI: func(ctx context.Context, cfg *config.Config, model string) (ai.Client, error) {
 			return ai.NewVertexAIClient(ctx, cfg, model)
 		},

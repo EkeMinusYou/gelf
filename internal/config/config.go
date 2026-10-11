@@ -13,25 +13,30 @@ import (
 
 const DefaultCommitMaxDiffBytes = 100_000
 const DefaultPRMaxDiffBytes = 100_000
+const DefaultPRMaxSessionLogBytes = 20_000
+const DefaultPRSessionLogCount = 3
 
 // DefaultCommitThinking keeps commit message generation fast; the task rarely benefits from reasoning.
 const DefaultCommitThinking = "minimal"
 
 type Config struct {
-	ProjectID          string
-	Location           string
-	FlashModel         string
-	ProModel           string
-	CommitLanguage     string
-	CommitModel        string
-	CommitMaxDiffBytes int
-	CommitThinking     string
-	PRLanguage         string
-	PRTitleLanguage    string
-	PRBodyLanguage     string
-	PRMaxDiffBytes     int
-	PRModel            string
-	Color              string
+	ProjectID            string
+	Location             string
+	FlashModel           string
+	ProModel             string
+	CommitLanguage       string
+	CommitModel          string
+	CommitMaxDiffBytes   int
+	CommitThinking       string
+	PRLanguage           string
+	PRTitleLanguage      string
+	PRBodyLanguage       string
+	PRMaxDiffBytes       int
+	PRSessionLogs        bool
+	PRSessionLogCount    int
+	PRMaxSessionLogBytes int
+	PRModel              string
+	Color                string
 }
 
 type FileConfig struct {
@@ -52,11 +57,14 @@ type FileConfig struct {
 		Thinking     string `yaml:"thinking"`
 	} `yaml:"commit"`
 	PR struct {
-		MaxDiffBytes  int    `yaml:"max_diff_bytes"`
-		Model         string `yaml:"model"`
-		Language      string `yaml:"language"`
-		TitleLanguage string `yaml:"title_language"`
-		BodyLanguage  string `yaml:"body_language"`
+		SessionLogs        bool   `yaml:"session_logs"`
+		SessionLogCount    *int   `yaml:"session_log_count"`
+		MaxSessionLogBytes int    `yaml:"max_session_log_bytes"`
+		MaxDiffBytes       int    `yaml:"max_diff_bytes"`
+		Model              string `yaml:"model"`
+		Language           string `yaml:"language"`
+		TitleLanguage      string `yaml:"title_language"`
+		BodyLanguage       string `yaml:"body_language"`
 	} `yaml:"pr"`
 }
 
@@ -160,6 +168,21 @@ func Load() (*Config, error) {
 		CommitLanguage: commitLanguage, CommitMaxDiffBytes: commitMaxDiffBytes, CommitThinking: commitThinking,
 		PRLanguage: prLanguage, PRTitleLanguage: prTitleLanguage, PRBodyLanguage: prBodyLanguage,
 		PRMaxDiffBytes: fileConfig.PR.MaxDiffBytes, Color: color,
+		PRSessionLogs:        fileConfig.PR.SessionLogs,
+		PRSessionLogCount:    DefaultPRSessionLogCount,
+		PRMaxSessionLogBytes: fileConfig.PR.MaxSessionLogBytes,
+	}
+	if fileConfig.PR.SessionLogCount != nil {
+		if *fileConfig.PR.SessionLogCount <= 0 {
+			return nil, fmt.Errorf("session_log_count must be greater than zero")
+		}
+		cfg.PRSessionLogCount = *fileConfig.PR.SessionLogCount
+	}
+	if cfg.PRMaxSessionLogBytes <= 0 {
+		cfg.PRMaxSessionLogBytes = DefaultPRMaxSessionLogBytes
+	}
+	if fileConfig.PR.MaxSessionLogBytes < 0 {
+		return nil, fmt.Errorf("max_session_log_bytes must not be negative")
 	}
 	if cfg.PRMaxDiffBytes <= 0 {
 		cfg.PRMaxDiffBytes = DefaultPRMaxDiffBytes

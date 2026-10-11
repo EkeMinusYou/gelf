@@ -28,7 +28,7 @@ func TestConfigurationDefaultsAndPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CommitModel != cfg.FlashModel || cfg.PRModel != cfg.ProModel || cfg.CommitMaxDiffBytes != 100000 || cfg.PRMaxDiffBytes != 100000 || cfg.CommitThinking != "minimal" || cfg.Color != "always" {
+	if cfg.CommitModel != cfg.FlashModel || cfg.PRModel != cfg.ProModel || cfg.CommitMaxDiffBytes != 100000 || cfg.PRMaxDiffBytes != 100000 || cfg.CommitThinking != "minimal" || cfg.Color != "always" || cfg.PRSessionLogs || cfg.PRMaxSessionLogBytes != 20000 || cfg.PRSessionLogCount != 3 {
 		t.Fatalf("defaults: %+v", cfg)
 	}
 	testutil.Write(t, dir, "xdg/gelf/gelf.yaml", "language: japanese\nmodel:\n  flash: custom-flash\n  pro: custom-pro\ncommit:\n  model: pro\n  thinking: high\npr:\n  model: flash\n  body_language: french\n  max_diff_bytes: 256\nvertex_ai:\n  project_id: file-project\n  location: file-location\n")
@@ -50,7 +50,7 @@ func TestConfigurationDefaultsAndPrecedence(t *testing.T) {
 }
 
 func TestInvalidConfigurationIsAnError(t *testing.T) {
-	for _, content := range []string{"commit: [invalid", "color: invalid", "commit:\n  max_diff_bytes: -1", "pr:\n  max_diff_bytes: -1", "commit:\n  thinking: none"} {
+	for _, content := range []string{"commit: [invalid", "color: invalid", "commit:\n  max_diff_bytes: -1", "pr:\n  max_diff_bytes: -1", "pr:\n  max_session_log_bytes: -1", "pr:\n  session_log_count: -1", "pr:\n  session_log_count: 0", "commit:\n  thinking: none"} {
 		t.Run(content, func(t *testing.T) {
 			dir := configEnv(t)
 			testutil.Write(t, dir, "gelf.yml", content)
@@ -65,6 +65,27 @@ func TestInvalidConfigurationIsAnError(t *testing.T) {
 	}
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "gelf.yml") {
 		t.Fatalf("unreadable config silently ignored: %v", err)
+	}
+}
+
+func TestSessionLogConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+		enabled       bool
+		count         int
+	}{
+		{name: "enabled", content: "pr:\n  session_logs: true\n  session_log_count: 5\n  max_session_log_bytes: 512\n", enabled: true, count: 5},
+		{name: "disabled", content: "pr:\n  session_logs: false\n  max_session_log_bytes: 512\n", count: 3},
+		{name: "count alone", content: "pr:\n  session_log_count: 2\n  max_session_log_bytes: 512\n", count: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := configEnv(t)
+			testutil.Write(t, dir, "gelf.yml", tc.content)
+			cfg, err := Load()
+			if err != nil || cfg.PRSessionLogs != tc.enabled || cfg.PRSessionLogCount != tc.count || cfg.PRMaxSessionLogBytes != 512 {
+				t.Fatalf("session config: %+v %v", cfg, err)
+			}
+		})
 	}
 }
 

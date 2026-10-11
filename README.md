@@ -152,6 +152,22 @@ gelf pr create
 
 The generated body follows the PR template when available; otherwise, it briefly explains the purpose and key changes, using headings or bullet points when helpful rather than fixed sections.
 
+Session log discovery is disabled by default. Enable it with `--session-logs` or `pr.session_logs: true` in `gelf.yml` to automatically discover recent local Claude Code and Codex CLI session logs to explain the intent and design rationale behind the changes. It reads `~/.claude/projects` and `~/.codex/sessions`, respecting `CLAUDE_CONFIG_DIR` and `CODEX_HOME`. Only conversations from the current Git worktree (including its subdirectories, excluding nested repositories) are eligible. Recorded branch names must match the local branch; logs without branch metadata are matched by worktree alone.
+
+Discovery considers files modified in the last seven days, checks up to 1,000 candidates in modification-time order, and uses at most `pr.session_log_count` sessions (default: three across both agents). Override the count with `--session-log-count N`; the count must be positive and does not enable discovery by itself. Older timestamped messages are excluded. Only user and assistant text is included; tool calls/results, reasoning, system instructions, and Claude subagent logs are excluded. Common credential patterns are redacted, but this is not a comprehensive secret filter. Selected excerpts are sent to the configured Vertex AI model alongside the diff, including with `--dry-run`. The selected log paths are printed to stderr. Missing logs leave the usual diff-based generation available, and unreadable logs produce a warning without blocking PR creation.
+
+Session context is limited to 20,000 bytes by default, retaining recent text when truncated. The generation and revision prompts treat logs as untrusted background material, use the final diff as the authority for implemented changes, and do not treat conversational test claims as execution evidence. Flags override configuration: `--session-logs` enables discovery, while `--session-logs=false` or `--no-session-logs` disables it. If both enabling and disabling flags are passed, `--no-session-logs` takes precedence.
+
+```yaml
+pr:
+  session_logs: true
+  session_log_count: 5
+```
+
+```bash
+gelf pr create --session-logs --session-log-count 5
+```
+
 The PR head is the repository and branch selected by the push remote. gelf respects `branch.<branch>.pushRemote`, `remote.pushDefault`, and the branch's upstream remote, falling back to `origin`. The base repository is the fork's parent when applicable, and the comparison uses that repository's default branch. An update uses the existing PR's base branch instead.
 
 Before generating content, gelf fetches the required base and head refs. This refreshes local refs and objects without changing working files or the current branch. If the base repository has no configured remote, gelf fetches its clone URL without adding a remote. `--dry-run` also fetches these refs but does not push or create/update a PR.
@@ -172,6 +188,9 @@ Options:
 - `--dry-run` to print the generated title/body without pushing or creating/updating a PR (required refs are fetched)
 - `--render` to render markdown in dry-run output (default: true)
 - `--no-render` to disable markdown rendering
+- `--session-logs` to enable automatic Claude/Codex session context (default: disabled; overrides configuration)
+- `--no-session-logs` to disable automatic Claude/Codex session context
+- `--session-log-count N` to set the maximum number of recent sessions when enabled (default: 3; overrides configuration; must be positive)
 - `--model` to override the model for PR generation
 - `--language` to set the output language for both title and body
 - `--title-language` to set the language for PR title only
@@ -385,6 +404,9 @@ pr:
   title_language: string # Language for PR title only (inherits from pr.language if not set)
   body_language: string  # Language for PR body only (inherits from pr.language if not set)
   max_diff_bytes: number # Maximum committed diff size sent to the AI (default: 100000)
+  session_logs: boolean # Automatically use recent Claude/Codex session context (default: false)
+  session_log_count: number # Maximum recent sessions across both agents (default: 3; must be positive)
+  max_session_log_bytes: number # Maximum session context size (default: 20000; negative is invalid)
 
 color: string            # Color output setting: "auto", "always", or "never" (default: always)
 ```

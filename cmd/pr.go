@@ -9,13 +9,15 @@ import (
 	"github.com/EkeMinusYou/gelf/internal/config"
 	"github.com/EkeMinusYou/gelf/internal/git"
 	"github.com/EkeMinusYou/gelf/internal/github"
+	"github.com/EkeMinusYou/gelf/internal/sessionlog"
 	"github.com/EkeMinusYou/gelf/internal/ui"
 	"github.com/spf13/cobra"
 )
 
 type prOptions struct {
-	Draft, DryRun, Render, NoRender, Yes, Update bool
-	Model, Language, TitleLanguage, BodyLanguage string
+	Draft, DryRun, Render, NoRender, Yes, Update, SessionLogs, NoSessionLogs bool
+	SessionLogCount                                                          int
+	Model, Language, TitleLanguage, BodyLanguage                             string
 }
 
 func newPRCommand(deps dependencies) *cobra.Command {
@@ -28,6 +30,9 @@ func newPRCommand(deps dependencies) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Print generated content without pushing or creating a pull request (fetches required refs)")
 	cmd.Flags().BoolVar(&opts.Render, "render", true, "Render pull request markdown body")
 	cmd.Flags().BoolVar(&opts.NoRender, "no-render", false, "Disable markdown rendering")
+	cmd.Flags().BoolVar(&opts.SessionLogs, "session-logs", false, "Enable automatic Claude/Codex session log context (overrides configuration)")
+	cmd.Flags().BoolVar(&opts.NoSessionLogs, "no-session-logs", false, "Disable automatic Claude/Codex session log context")
+	cmd.Flags().IntVar(&opts.SessionLogCount, "session-log-count", config.DefaultPRSessionLogCount, "Maximum recent sessions to reference when session logs are enabled (overrides configuration)")
 	cmd.Flags().BoolVar(&opts.Yes, "yes", false, "Approve normal push and PR creation (force push still requires confirmation)")
 	cmd.Flags().BoolVar(&opts.Update, "update", false, "Update the matching open pull request, or create one if none exists")
 	cmd.Flags().StringVar(&opts.Model, "model", "", "Override default model for PR generation")
@@ -55,6 +60,18 @@ func runPRCreate(cmd *cobra.Command, opts prOptions, deps dependencies) error {
 	cfg, err := deps.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+	// Resolve CLI overrides on a copy so shared configuration is not mutated.
+	resolved := *cfg
+	cfg = &resolved
+	if cmd.Flags().Changed("session-logs") {
+		cfg.PRSessionLogs = opts.SessionLogs
+	}
+	if cmd.Flags().Changed("session-log-count") {
+		if opts.SessionLogCount <= 0 {
+			return fmt.Errorf("--session-log-count must be greater than zero")
+		}
+		cfg.PRSessionLogCount = opts.SessionLogCount
 	}
 	session := ui.NewSession(ctx, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg.UseColor(cmd.OutOrStdout()), cfg.UseColor(cmd.ErrOrStderr()))
 	opts.Render = opts.Render && !opts.NoRender
@@ -203,6 +220,22 @@ func preparePR(ctx context.Context, deps dependencies, pr *prContext, cfg *confi
 		BaseBranch: pr.BaseBranch, HeadBranch: pr.Target.Branch, CommitLog: log, DiffStat: stat,
 		Diff: limitDiffWithWarning(diff, cfg.PRMaxDiffBytes, "PR", session), Template: template,
 		Language: cfg.PRLanguage, TitleLanguage: titleLanguage, BodyLanguage: bodyLanguage,
+	}
+	if cfg.PRSessionLogs && !opts.NoSessionLogs && deps.FindSessions != nil {
+		logs, err := deps.FindSessions(ctx, root, pr.Target.LocalBranch, sessionlog.Options{MaxSessions: cfg.PRSessionLogCount, MaxBytes: cfg.PRMaxSessionLogBytes})
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			fmt.Fprintf(session.Err, "Warning: could not read some agent session logs: %v\n", err)
+		}
+		pr.Input.SessionContext = logs.Context
+		for _, source := range logs.Sources {
+			fmt.Fprintf(session.Err, "Using %s session log: %q\n", source.Agent, source.Path)
+		}
+		if logs.Truncated {
+			fmt.Fprintln(session.Err, "Warning: session context was truncated; retaining recent messages.")
+		}
 	}
 	return nil
 }
