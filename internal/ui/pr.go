@@ -6,6 +6,7 @@ import (
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/git"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type prModel struct {
@@ -36,7 +37,7 @@ func NewPRTUI(session *Session, aiClient ai.Client, input ai.PullRequestInput, s
 		useColor:    session.UseColor,
 		confirmPrompt: func() string {
 			if strings.TrimSpace(confirmPrompt) == "" {
-				return "Create this pull request? (y)es / (r)evise / (n)o"
+				return "Create this pull request? (y)es / (e)dit / (p)rompt / (n)o"
 			}
 			return confirmPrompt
 		}(),
@@ -70,9 +71,22 @@ func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
 			return m.content, true, nil
 		case PRChoiceNo:
 			return m.content, false, nil
-		case PRChoiceRevise:
+		case PRChoiceEdit:
+			edited, err := m.editInEditor()
+			if err != nil {
+				fmt.Fprintf(m.session.Err, "%s\n\n", m.styles.Error.Render(fmt.Sprintf("✗ Kept the previous pull request: %v", err)))
+				continue
+			}
+			m.content = edited
+			m.refreshRenderedBody()
+			m.printedContext = true
+
+			fmt.Fprintln(m.session.Out)
+			fmt.Fprintf(m.session.Out, "%s\n", m.buildPRContent())
+			fmt.Fprintln(m.session.Out)
+		case PRChoicePrompt:
 			instructions, ok, err := m.session.Line(
-				"💬 Tell me how to revise the pull request:",
+				"💬 Enter a prompt to refine the pull request:",
 				"e.g. shorten the title and clarify the summary",
 			)
 			if err != nil {
@@ -86,7 +100,7 @@ func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
 			revised, err := m.aiClient.RevisePullRequestContent(ctx, m.input, m.content, instructions)
 			revisionStop()
 			if err != nil {
-				fmt.Fprintf(m.session.Err, "%s\n\n", m.styles.Error.Render(fmt.Sprintf("✗ Failed to revise pull request: %v", err)))
+				fmt.Fprintf(m.session.Err, "%s\n\n", m.styles.Error.Render(fmt.Sprintf("✗ Failed to apply the prompt; kept the previous pull request: %v", err)))
 				continue
 			}
 
@@ -99,6 +113,27 @@ func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
 			fmt.Fprintln(m.session.Out)
 		}
 	}
+}
+
+// editInEditor opens the title and body in the user's editor; the first line is the title.
+func (m *prModel) editInEditor() (*ai.PullRequestContent, error) {
+	if !m.session.terminalInput() {
+		return nil, fmt.Errorf("editing requires an interactive terminal")
+	}
+	edit, err := newEditSession(m.session.Context, "PULL_REQUEST_EDITMSG.md", prEditContent(m.content))
+	if err != nil {
+		return nil, err
+	}
+	defer edit.cleanup()
+	edit.cmd.Stdin, edit.cmd.Stdout, edit.cmd.Stderr = m.session.In, m.session.Out, m.session.Err
+	if err := edit.cmd.Run(); err != nil {
+		return nil, fmt.Errorf("editor failed: %w", err)
+	}
+	content, err := edit.content()
+	if err != nil {
+		return nil, err
+	}
+	return parsePREdit(content)
 }
 
 func (m *prModel) refreshRenderedBody() {
@@ -130,12 +165,12 @@ func (m *prModel) startRevisionIndicator() func() {
 	if !isTerminalWriter(m.session.Err) {
 		return func() {}
 	}
-	return m.session.Spinner("Revising pull request based on your feedback...", false)
+	return m.session.Spinner("Applying your prompt to the pull request...", false)
 }
 
 func (m *prModel) buildPRContent() string {
 	header := m.styles.Title.Render("📝 Generated Pull Request:")
-	title := m.styles.Message.Render(m.content.Title)
+	title := formatSubject(m.content.Title, m.styles, m.styles.Message)
 	body := m.content.Body
 	if m.render && m.renderedBody != "" {
 		body = m.renderedBody
@@ -171,7 +206,12 @@ func formatPRContext(summary git.DiffSummary, commitLines []string, styles Style
 func formatPRCommitLog(commitLines []string, styles Styles) string {
 	parts := []string{styles.Diff.Render("🧾 Commits:")}
 	for _, line := range commitLines {
-		parts = append(parts, fmt.Sprintf(" • %s", line))
+		hash, subject, ok := strings.Cut(line, " ")
+		if !ok {
+			parts = append(parts, fmt.Sprintf(" • %s", line))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf(" • %s %s", styles.Subtle.Render(hash), formatSubject(subject, styles, lipgloss.Style{})))
 	}
 	return strings.Join(parts, "\n")
 }

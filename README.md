@@ -70,7 +70,7 @@ vertex_ai:
   location: "global"  # optional, default: global
 
 model:
-  flash: gemini-3-flash-preview
+  flash: gemini-3.8-flash
   pro: gemini-3.1-pro-preview
 
 language: "english"  # optional, default: english
@@ -78,6 +78,7 @@ language: "english"  # optional, default: english
 commit:
   model: "flash"     # optional, default: flash
   language: "english"  # optional, inherits from global language
+  thinking: "minimal"  # optional, default: minimal
 
 pr:
   model: "pro"       # optional, default: pro
@@ -130,13 +131,16 @@ git add .
 gelf commit
 ```
 
+Generated messages have a Conventional Commits subject line and, for material changes, a body separated by a blank line. The AI receives the staged diff, its diffstat, the current branch name, and the five most recent commit subjects so that the generated message follows the repository's existing scope and wording style.
+
 3. Interactive TUI operations:
-   - Review the AI-generated commit message
+   - Review the AI-generated commit message (Conventional Commits types such as `feat` and `chore` are color-coded; breaking changes marked with `!` or a `BREAKING CHANGE:` footer are shown in white on red)
    - Press `y` to approve or `n` to cancel
-   - Press `e` to edit the commit message
+   - Press `e` to edit the commit message in your editor (the same one git uses: `GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`, then `vi`). Save and quit to apply; lines starting with `#` are ignored, and an empty message keeps the previous one
+   - Press `p` to give the AI a prompt for refining the message (e.g. "add a body", "write it in Japanese"); `Esc` cancels
    - Press `q` or `Ctrl+C` to cancel during generation
    - The commit will be executed automatically upon approval
-   - Success message displays after TUI exits
+   - Success message with the commit subject displays after TUI exits
 
 ### Pull Request Creation
 
@@ -175,7 +179,8 @@ Only open PRs (including drafts) with the exact head repository and branch count
 After the PR title and description are generated, the interactive prompt lets you:
 
 - Press `y` to create the pull request with the generated content
-- Press `r` to enter chat-style revision instructions (e.g. "shorten the title", "clarify the summary in Japanese"). gelf re-generates the title/body using your feedback and asks again — repeat as many times as you like.
+- Press `e` to edit the title and body in your editor (the first line is the title, the rest is the body)
+- Press `p` to enter a chat-style prompt (e.g. "shorten the title", "clarify the summary in Japanese"). gelf re-generates the title/body using your feedback and asks again — repeat as many times as you like.
 - Press `n` (or `Esc` / `q`) to cancel without creating a PR
 
 Options:
@@ -312,7 +317,7 @@ This allows you to set a global default language, override it for specific comma
 - **Commit Target**: Staged changes only (`git diff --staged`)
 - **PR Target**: Committed changes between base branch and `HEAD`
 - **AI Provider**: Vertex AI (Gemini models)
-- **Default Flash Model**: gemini-3-flash-preview
+- **Default Flash Model**: gemini-3.8-flash
 - **Default Pro Model**: gemini-3.1-pro-preview
 - **UI Framework**: Bubble Tea (TUI)
 - **CLI Framework**: Cobra
@@ -381,7 +386,7 @@ vertex_ai:
   location: string       # Vertex AI location (default: global)
 
 model:
-  flash: string          # Gemini Flash model to use (default: gemini-3-flash-preview)
+  flash: string          # Gemini Flash model to use (default: gemini-3.8-flash)
   pro: string            # Gemini Pro model to use (default: gemini-3.1-pro-preview)
 
 language: string         # Global default language (default: english)
@@ -390,6 +395,8 @@ commit:
   model: string          # Model for commits: "flash", "pro", or custom (default: flash)
   language: string       # Language for commit messages (inherits from global if not set)
   max_diff_bytes: number # Maximum staged diff size sent to the AI (default: 100000)
+  thinking: string       # Gemini thinking level for commits: "minimal", "low", "medium", "high", or "default" (default: minimal)
+                         # Unsupported levels fall back automatically (minimal → low → model default), e.g. for Pro or Gemini 2.5
 
 pr:
   model: string          # Model for pull requests: "flash", "pro", or custom (default: pro)

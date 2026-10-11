@@ -28,10 +28,10 @@ func TestConfigurationDefaultsAndPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CommitModel != cfg.FlashModel || cfg.PRModel != cfg.ProModel || cfg.CommitMaxDiffBytes != 100000 || cfg.PRMaxDiffBytes != 100000 || cfg.Color != "always" || cfg.PRSessionLogs || cfg.PRMaxSessionLogBytes != 20000 || cfg.PRSessionLogCount != 3 {
+	if cfg.CommitModel != cfg.FlashModel || cfg.PRModel != cfg.ProModel || cfg.CommitMaxDiffBytes != 100000 || cfg.PRMaxDiffBytes != 100000 || cfg.CommitThinking != "minimal" || cfg.Color != "always" || cfg.PRSessionLogs || cfg.PRMaxSessionLogBytes != 20000 || cfg.PRSessionLogCount != 3 {
 		t.Fatalf("defaults: %+v", cfg)
 	}
-	testutil.Write(t, dir, "xdg/gelf/gelf.yaml", "language: japanese\nmodel:\n  flash: custom-flash\n  pro: custom-pro\ncommit:\n  model: pro\npr:\n  model: flash\n  body_language: french\n  max_diff_bytes: 256\nvertex_ai:\n  project_id: file-project\n  location: file-location\n")
+	testutil.Write(t, dir, "xdg/gelf/gelf.yaml", "language: japanese\nmodel:\n  flash: custom-flash\n  pro: custom-pro\ncommit:\n  model: pro\n  thinking: high\npr:\n  model: flash\n  body_language: french\n  max_diff_bytes: 256\nvertex_ai:\n  project_id: file-project\n  location: file-location\n")
 	t.Setenv("GOOGLE_CLOUD_PROJECT", "fallback-project")
 	t.Setenv("VERTEXAI_PROJECT", "preferred-project")
 	t.Setenv("VERTEXAI_LOCATION", "env-location")
@@ -39,7 +39,7 @@ func TestConfigurationDefaultsAndPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.FlashModel != "custom-flash" || cfg.ProModel != "custom-pro" || cfg.CommitModel != "custom-pro" || cfg.PRModel != "custom-flash" || cfg.ProjectID != "preferred-project" || cfg.Location != "env-location" || cfg.PRTitleLanguage != "japanese" || cfg.PRBodyLanguage != "french" || cfg.PRMaxDiffBytes != 256 {
+	if cfg.FlashModel != "custom-flash" || cfg.ProModel != "custom-pro" || cfg.CommitModel != "custom-pro" || cfg.PRModel != "custom-flash" || cfg.ProjectID != "preferred-project" || cfg.Location != "env-location" || cfg.PRTitleLanguage != "japanese" || cfg.PRBodyLanguage != "french" || cfg.PRMaxDiffBytes != 256 || cfg.CommitThinking != "high" {
 		t.Fatalf("precedence: %+v", cfg)
 	}
 	testutil.Write(t, dir, "gelf.yml", "commit:\n  model: direct-model\n")
@@ -50,7 +50,7 @@ func TestConfigurationDefaultsAndPrecedence(t *testing.T) {
 }
 
 func TestInvalidConfigurationIsAnError(t *testing.T) {
-	for _, content := range []string{"commit: [invalid", "color: invalid", "commit:\n  max_diff_bytes: -1", "pr:\n  max_diff_bytes: -1", "pr:\n  max_session_log_bytes: -1", "pr:\n  session_log_count: -1", "pr:\n  session_log_count: 0"} {
+	for _, content := range []string{"commit: [invalid", "color: invalid", "commit:\n  max_diff_bytes: -1", "pr:\n  max_diff_bytes: -1", "pr:\n  max_session_log_bytes: -1", "pr:\n  session_log_count: -1", "pr:\n  session_log_count: 0", "commit:\n  thinking: none"} {
 		t.Run(content, func(t *testing.T) {
 			dir := configEnv(t)
 			testutil.Write(t, dir, "gelf.yml", content)

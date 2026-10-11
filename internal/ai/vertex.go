@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -25,13 +26,22 @@ type PullRequestInput struct {
 	BodyLanguage   string
 }
 
+type CommitInput struct {
+	Diff          string
+	DiffStat      string
+	Branch        string
+	RecentCommits string
+	Language      string
+}
+
 type PullRequestContent struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
 }
 
 type Client interface {
-	GenerateCommitMessage(context.Context, string, string) (string, error)
+	GenerateCommitMessage(context.Context, CommitInput) (string, error)
+	ReviseCommitMessage(context.Context, CommitInput, string, string) (string, error)
 	GeneratePullRequestContent(context.Context, PullRequestInput) (*PullRequestContent, error)
 	RevisePullRequestContent(context.Context, PullRequestInput, *PullRequestContent, string) (*PullRequestContent, error)
 }
@@ -41,8 +51,9 @@ type contentGenerator interface {
 }
 
 type VertexAIClient struct {
-	generator contentGenerator
-	model     string
+	generator      contentGenerator
+	model          string
+	commitThinking string
 }
 
 func NewVertexAIClient(ctx context.Context, cfg *config.Config, model string) (*VertexAIClient, error) {
@@ -68,47 +79,86 @@ func NewVertexAIClient(ctx context.Context, cfg *config.Config, model string) (*
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Vertex AI client: %w", err)
 	}
-	return &VertexAIClient{generator: client.Models, model: model}, nil
+	return &VertexAIClient{generator: client.Models, model: model, commitThinking: cfg.CommitThinking}, nil
 }
 
-func (v *VertexAIClient) GenerateCommitMessage(ctx context.Context, diff string, language string) (string, error) {
-	prompt := fmt.Sprintf(`Analyze the following git diff and generate a precise commit message following the Conventional Commits specification.
-
-DIFF ANALYSIS GUIDE:
-1. Look at file paths to understand what parts of the codebase are affected
-2. Examine +/- lines to understand what was added, removed, or modified
-3. Pay attention to function names, variable names, and code structure changes
-4. Consider the context lines (prefixed with space) to understand the surrounding code
-5. Identify the primary purpose: new feature, bug fix, refactoring, etc.
-
-COMMIT MESSAGE REQUIREMENTS:
-1. Use %s language
-2. Follow format: <type>[optional scope]: <description>
-3. Valid types: feat, fix, docs, style, refactor, test, chore, perf, ci, build, revert
-4. Keep under 72 characters total
-5. Use imperative mood ("add" not "added")
-6. Start description with lowercase letter
-7. No period at the end
-8. If multiple changes, focus on the most significant one
-9. Use scope when it helps clarify the area of change (e.g., auth, api, ui)
-
-EXAMPLES:
-- feat(auth): add JWT token validation
-- fix(api): resolve null pointer in user service
-- refactor(db): simplify connection pooling logic
-- test(payment): add unit tests for stripe integration
-- chore(deps): update react to version 18.2.0
-
-Git diff:
-%s
-
-Respond with only the commit message, no additional text or formatting.`, language, diff)
-
-	text, err := v.generate(ctx, prompt, 0.3, false)
+func (v *VertexAIClient) GenerateCommitMessage(ctx context.Context, input CommitInput) (string, error) {
+	prompt := commitPrompt("<task>Write a commit message for the staged changes below.</task>", input, "")
+	text, err := v.generate(ctx, prompt, 0.3, false, v.commitThinking)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate commit message: %w", err)
 	}
 	return text, nil
+}
+
+func (v *VertexAIClient) ReviseCommitMessage(ctx context.Context, input CommitInput, previous, instructions string) (string, error) {
+	if strings.TrimSpace(previous) == "" {
+		return "", fmt.Errorf("previous commit message is required for revision")
+	}
+	if strings.TrimSpace(instructions) == "" {
+		return "", fmt.Errorf("revision instructions are empty")
+	}
+	revision := fmt.Sprintf(`
+
+<current_message>
+%s
+</current_message>
+
+<revision_instructions>
+%s
+</revision_instructions>`, previous, instructions)
+	prompt := commitPrompt(`<task>Revise the current commit message for the staged changes below.
+Apply the revision instructions faithfully and keep everything they do not affect.
+The instructions take precedence over the format and style rules.</task>`, input, revision)
+	text, err := v.generate(ctx, prompt, 0.3, false, v.commitThinking)
+	if err != nil {
+		return "", fmt.Errorf("failed to revise commit message: %w", err)
+	}
+	return text, nil
+}
+
+func commitPrompt(task string, input CommitInput, suffix string) string {
+	recentCommits := input.RecentCommits
+	if recentCommits == "" {
+		recentCommits = "NONE"
+	}
+	branch := input.Branch
+	if branch == "" {
+		branch = "UNKNOWN"
+	}
+	return fmt.Sprintf(`%s
+
+<format>
+- Subject line: <type>[optional scope]: <description>
+- Conventional Commits types: feat, fix, docs, style, refactor, test, chore, perf, ci, build, revert
+- Subject under 72 characters, imperative mood, lowercase description, no trailing period
+- For material changes, add a blank line then a body explaining what changed and why
+- Wrap body lines at 72 characters; use "- " bullet points for multiple distinct changes
+- Omit the body for trivial changes where the subject says everything
+- Output only the commit message, no quotes or code blocks
+</format>
+
+<style>
+- Write the subject description and body in %s
+- Match the scope naming and wording of the recent commits when they fit
+- The subject names the most significant change; the body covers the rest
+- Describe the change itself; do not speculate beyond what the diff shows
+</style>
+
+<diffstat>
+%s
+</diffstat>
+
+<diff>
+%s
+</diff>
+
+<context>
+Branch: %s
+<recent_commits>
+%s
+</recent_commits>
+</context>%s`, task, input.Language, input.DiffStat, input.Diff, branch, recentCommits, suffix)
 }
 
 func (v *VertexAIClient) GeneratePullRequestContent(ctx context.Context, input PullRequestInput) (*PullRequestContent, error) {
@@ -223,7 +273,8 @@ USER_REVISION_INSTRUCTIONS:
 	return v.generatePR(ctx, prompt)
 }
 
-func (v *VertexAIClient) generate(ctx context.Context, prompt string, temperature float32, structured bool) (string, error) {
+// generate leaves thinking to the model when thinking is "" or "default".
+func (v *VertexAIClient) generate(ctx context.Context, prompt string, temperature float32, structured bool, thinking string) (string, error) {
 	opts := &genai.GenerateContentConfig{Temperature: genai.Ptr(temperature)}
 	if structured {
 		opts.ResponseMIMEType = "application/json"
@@ -231,7 +282,19 @@ func (v *VertexAIClient) generate(ctx context.Context, prompt string, temperatur
 			"title": {Type: genai.TypeString}, "body": {Type: genai.TypeString},
 		}}
 	}
-	resp, err := v.generator.GenerateContent(ctx, v.model, []*genai.Content{genai.NewContentFromText(prompt, genai.RoleUser)}, opts)
+	contents := []*genai.Content{genai.NewContentFromText(prompt, genai.RoleUser)}
+	var resp *genai.GenerateContentResponse
+	var err error
+	for _, level := range thinkingFallbacks(thinking) {
+		opts.ThinkingConfig = nil
+		if level != "" {
+			opts.ThinkingConfig = &genai.ThinkingConfig{ThinkingLevel: level}
+		}
+		resp, err = v.generator.GenerateContent(ctx, v.model, contents, opts)
+		if !unsupportedThinking(err) {
+			break
+		}
+	}
 	if err != nil {
 		return "", err
 	}
@@ -259,7 +322,7 @@ func (v *VertexAIClient) generate(ctx context.Context, prompt string, temperatur
 }
 
 func (v *VertexAIClient) generatePR(ctx context.Context, prompt string) (*PullRequestContent, error) {
-	text, err := v.generate(ctx, prompt, 0.2, true)
+	text, err := v.generate(ctx, prompt, 0.2, true, "default")
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate pull request content: %w", err)
 	}
@@ -280,6 +343,30 @@ func (v *VertexAIClient) generatePR(ctx context.Context, prompt string) (*PullRe
 		return nil, fmt.Errorf("generated PR title must be a single line")
 	}
 	return &result, nil
+}
+
+// thinkingFallbacks lists the levels to try in order; "" means the model default.
+// Models support different levels (e.g. some reject MINIMAL but accept LOW), so
+// an unsupported level steps toward the default instead of failing.
+func thinkingFallbacks(thinking string) []genai.ThinkingLevel {
+	switch thinking {
+	case "", "default":
+		return []genai.ThinkingLevel{""}
+	case "minimal":
+		return []genai.ThinkingLevel{genai.ThinkingLevelMinimal, genai.ThinkingLevelLow, ""}
+	default:
+		return []genai.ThinkingLevel{genai.ThinkingLevel(strings.ToUpper(thinking)), ""}
+	}
+}
+
+func unsupportedThinking(err error) bool {
+	var apiErr genai.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != 400 {
+		return false
+	}
+	// Vertex AI words this differently per model ("thinking_level ..." or "Thinking level ...").
+	message := strings.ToLower(apiErr.Message)
+	return strings.Contains(message, "thinking_level") || strings.Contains(message, "thinking level")
 }
 
 func (input PullRequestInput) promptSettings() (titleLanguage, bodyLanguage, template string) {

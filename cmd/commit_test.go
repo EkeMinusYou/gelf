@@ -25,7 +25,7 @@ func TestCommitLimitsOnlyAIInputAndResolvesModelAlias(t *testing.T) {
 		return client, nil
 	}}
 	out, stderr, err := executeCommand(t, deps, "", "commit", "--dry-run", "--model", "pro", "--language", "japanese")
-	if err != nil || out != "fix: generated message" || !strings.Contains(stderr, "later-日本語.txt (+2, -0)") || len(client.Diff) > 120 || client.Model != "pro-model" || client.Language != "japanese" {
+	if err != nil || out != "fix: generated message" || !strings.Contains(stderr, "later-日本語.txt (+2, -0)") || len(client.Commit.Diff) > 120 || !strings.Contains(client.Commit.DiffStat, "a.txt") || client.Commit.Branch != "main" || client.Commit.RecentCommits != "initial" || client.Model != "pro-model" || client.Commit.Language != "japanese" {
 		t.Fatalf("out=%q stderr=%q client=%+v err=%v", out, stderr, client, err)
 	}
 	if cfg.FlashModel != "flash-model" || cfg.CommitLanguage != "english" {

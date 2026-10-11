@@ -14,7 +14,7 @@ vertex_ai:
 
 # Model definitions
 model:
-  flash: gemini-3-flash-preview
+  flash: gemini-3.8-flash
   pro: gemini-3.1-pro-preview
 
 # Default language for all operations (default: english)
