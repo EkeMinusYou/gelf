@@ -163,7 +163,7 @@ func TestPRSessionDiscoveryWarningsAreNonfatalAndUseLocalBranch(t *testing.T) {
 		return sessionlog.Result{Context: "background intent", Truncated: true}, fmt.Errorf("unreadable log")
 	}
 	_, stderr, err := executeCommand(t, f.Deps, "", "pr", "create", "--dry-run")
-	if err != nil || f.AI.Input.SessionContext != "background intent" || !strings.Contains(stderr, "unreadable log") || !strings.Contains(stderr, "context was truncated") {
+	if err != nil || f.AI.Input.SessionContext != "background intent" || !strings.Contains(stderr, "unreadable log") || strings.Contains(stderr, "truncated") {
 		t.Fatalf("input=%+v stderr=%q err=%v", f.AI.Input, stderr, err)
 	}
 }

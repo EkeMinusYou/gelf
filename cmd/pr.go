@@ -232,9 +232,6 @@ func preparePR(ctx context.Context, deps dependencies, pr *prContext, cfg *confi
 		}
 		pr.Input.SessionContext = logs.Context
 		pr.Sessions = logs.Sources
-		if logs.Truncated {
-			fmt.Fprintln(session.Err, "Warning: session context was truncated; retaining recent messages.")
-		}
 	}
 	return nil
 }
