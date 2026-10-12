@@ -53,7 +53,7 @@ func TestPRDryRunUsesSessionContextWhenEnabled(t *testing.T) {
 	storage := t.TempDir()
 	path := filepath.Join(storage, "projects/project/session.jsonl")
 	now := time.Now()
-	entry, err := json.Marshal(map[string]any{"type": "user", "cwd": f.Dir, "gitBranch": "feature", "timestamp": now.Format(time.RFC3339Nano), "message": map[string]string{"role": "user", "content": "Preserve compatibility with older clients"}})
+	entry, err := json.Marshal(map[string]any{"type": "user", "sessionId": "claude-session-123", "cwd": f.Dir, "gitBranch": "feature", "timestamp": now.Format(time.RFC3339Nano), "message": map[string]string{"role": "user", "content": "Preserve compatibility with older clients"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,8 +65,11 @@ func TestPRDryRunUsesSessionContextWhenEnabled(t *testing.T) {
 	}
 	f.Deps.FindSessions = (sessionlog.Detector{CodexHome: filepath.Join(storage, "codex"), ClaudeHome: storage, Now: now}).Find
 	_, stderr, err := executeCommand(t, f.Deps, "", "pr", "create", "--dry-run", "--session-logs")
-	if err != nil || !strings.Contains(f.AI.Input.SessionContext, "Preserve compatibility") || !strings.Contains(stderr, "Using Claude session log:") || !strings.Contains(stderr, path) {
+	if err != nil || !strings.Contains(f.AI.Input.SessionContext, "Preserve compatibility") || !strings.Contains(stderr, "📚 Agent Sessions:\n • Claude (1 session)\n   └─ claude-session-123") || strings.Contains(stderr, path) || strings.Contains(stderr, "Including context from") {
 		t.Fatalf("input=%+v stderr=%q err=%v", f.AI.Input, stderr, err)
+	}
+	if commits, sessions := strings.Index(stderr, "🧾 Commits:"), strings.Index(stderr, "📚 Agent Sessions:"); commits < 0 || sessions <= commits {
+		t.Fatalf("session section must follow commits: %q", stderr)
 	}
 }
 
@@ -160,7 +163,7 @@ func TestPRSessionDiscoveryWarningsAreNonfatalAndUseLocalBranch(t *testing.T) {
 		return sessionlog.Result{Context: "background intent", Truncated: true}, fmt.Errorf("unreadable log")
 	}
 	_, stderr, err := executeCommand(t, f.Deps, "", "pr", "create", "--dry-run")
-	if err != nil || f.AI.Input.SessionContext != "background intent" || !strings.Contains(stderr, "unreadable log") || !strings.Contains(stderr, "context was truncated") {
+	if err != nil || f.AI.Input.SessionContext != "background intent" || !strings.Contains(stderr, "unreadable log") || strings.Contains(stderr, "truncated") {
 		t.Fatalf("input=%+v stderr=%q err=%v", f.AI.Input, stderr, err)
 	}
 }

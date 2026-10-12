@@ -142,6 +142,53 @@ func TestDiscoveryUsesConfiguredSessionCount(t *testing.T) {
 	}
 }
 
+func TestDiscoveryExtractsSessionIDs(t *testing.T) {
+	const metadataID = "01a11937-8871-79d2-8f3b-69931036beba"
+	const filenameID = "01a11937-8cfc-7881-9579-26719997e3c4"
+	for _, tc := range []struct {
+		name, agent, filename, field, wantID string
+	}{
+		{"Codex id", "Codex", "rollout-2026-10-08T10-53-52-" + filenameID + ".jsonl", "id", metadataID},
+		{"Codex session_id", "Codex", "session.jsonl", "session_id", metadataID},
+		{"Claude sessionId", "Claude", filenameID + ".jsonl", "sessionId", metadataID},
+		{"Codex filename fallback", "Codex", "rollout-2026-10-08T10-53-52-" + filenameID + ".jsonl", "", filenameID},
+		{"Claude filename fallback", "Claude", filenameID + ".jsonl", "", filenameID},
+		{"unknown filename is not an ID", "Codex", "session.jsonl", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, root := detector(t)
+			if tc.agent == "Codex" {
+				meta := codexMeta(root, "feature").(map[string]any)
+				payload := meta["payload"].(map[string]any)
+				if tc.field != "" {
+					payload[tc.field] = metadataID
+				}
+				if tc.field == "session_id" {
+					payload["id"] = filenameID
+				}
+				writeLog(t, filepath.Join(d.CodexHome, "sessions", tc.filename), d.Now, meta, codexMessage("user", "", "session intent", d.Now))
+			} else {
+				message := claudeMessage(root, "feature", "user", "session intent", d.Now)
+				if tc.field != "" {
+					message[tc.field] = metadataID
+				}
+				sidechain := claudeMessage(root, "feature", "user", "excluded sidechain", d.Now)
+				sidechain["isSidechain"], sidechain["sessionId"] = true, "sidechain-id"
+				meta := claudeMessage(root, "feature", "user", "excluded meta", d.Now)
+				meta["isMeta"], meta["sessionId"] = true, "meta-id"
+				writeLog(t, filepath.Join(d.ClaudeHome, "projects/project", tc.filename), d.Now, message, sidechain, meta)
+			}
+			result, err := d.Find(context.Background(), root, "feature", Options{MaxBytes: 1000})
+			if err != nil || len(result.Sources) != 1 || result.Sources[0].ID != tc.wantID {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			if tc.wantID != "" && strings.Contains(result.Context, tc.wantID) {
+				t.Fatal("display-only session ID was added to AI context")
+			}
+		})
+	}
+}
+
 func TestDiscoveryHandlesPartialLogsAndRedactsCredentials(t *testing.T) {
 	d, root := detector(t)
 	path := filepath.Join(d.ClaudeHome, "projects/project/session.jsonl")

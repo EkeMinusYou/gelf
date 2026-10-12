@@ -27,7 +27,7 @@ const (
 )
 
 type Source struct {
-	Agent, Path string
+	Agent, Path, ID string
 }
 
 type Result struct {
@@ -116,7 +116,7 @@ func (d Detector) Find(ctx context.Context, root, branch string, opts Options) (
 				return nil
 			}
 			if !info.ModTime().Before(cutoff) {
-				files = append(files, candidate{Source{storage.agent, path}, info.ModTime()})
+				files = append(files, candidate{Source: Source{Agent: storage.agent, Path: path, ID: sessionIDFromFilename(path)}, modified: info.ModTime()})
 			}
 			return nil
 		})
@@ -139,7 +139,7 @@ func (d Detector) Find(ctx context.Context, root, branch string, opts Options) (
 		if i >= 1000 || len(result.Sources) >= maxSessions || len(result.Context) >= maxBytes {
 			break
 		}
-		text, truncated, err := read(ctx, file, root, branch, cutoff, maxBytes)
+		text, truncated, err := read(ctx, &file, root, branch, cutoff, maxBytes)
 		if err != nil {
 			warnings = append(warnings, fmt.Errorf("session log %q: %w", file.Path, err))
 			continue
@@ -163,6 +163,7 @@ func (d Detector) Find(ctx context.Context, root, branch string, opts Options) (
 type record struct {
 	Type      string  `json:"type"`
 	Timestamp string  `json:"timestamp"`
+	SessionID string  `json:"sessionId"`
 	Cwd       string  `json:"cwd"`
 	Branch    string  `json:"gitBranch"`
 	Sidechain bool    `json:"isSidechain"`
@@ -173,6 +174,8 @@ type record struct {
 
 type payload struct {
 	Type, Cwd, Role, Channel string
+	ID                       string `json:"id"`
+	SessionID                string `json:"session_id"`
 	Content                  json.RawMessage
 	Git                      struct{ Branch string }
 	Source                   json.RawMessage
@@ -183,7 +186,7 @@ type message struct {
 	Content json.RawMessage
 }
 
-func read(ctx context.Context, file candidate, root, branch string, cutoff time.Time, maxBytes int) (string, bool, error) {
+func read(ctx context.Context, file *candidate, root, branch string, cutoff time.Time, maxBytes int) (string, bool, error) {
 	f, err := os.Open(file.Path)
 	if err != nil {
 		return "", false, err
@@ -217,6 +220,11 @@ func read(ctx context.Context, file candidate, root, branch string, cutoff time.
 			switch r.Type {
 			case "session_meta":
 				cwd, sessionBranch = r.Payload.Cwd, r.Payload.Git.Branch
+				if r.Payload.SessionID != "" {
+					file.ID = r.Payload.SessionID
+				} else if r.Payload.ID != "" {
+					file.ID = r.Payload.ID
+				}
 				// Subagent conversations are not main user sessions.
 				if strings.Contains(strings.ReplaceAll(string(r.Payload.Source), "_", ""), "subagent") {
 					return "", false, nil
@@ -238,6 +246,9 @@ func read(ctx context.Context, file candidate, root, branch string, cutoff time.
 			if r.Cwd != "" {
 				cwd, sessionBranch = r.Cwd, r.Branch
 				matched = inScope(cwd) && (sessionBranch == "" || sessionBranch == branch)
+			}
+			if matched && !r.Sidechain && !r.Meta && r.SessionID != "" {
+				file.ID = r.SessionID
 			}
 			if (r.Type == "user" || r.Type == "assistant") && !r.Sidechain && !r.Meta {
 				role, content = r.Message.Role, r.Message.Content
@@ -269,6 +280,13 @@ func read(ctx context.Context, file candidate, root, branch string, cutoff time.
 		return "", false, fmt.Errorf("exceeds the %d-byte read limit", maxReadBytes)
 	}
 	return text, truncated, nil
+}
+
+var filenameSessionID = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+func sessionIDFromFilename(path string) string {
+	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	return filenameSessionID.FindString(name)
 }
 
 func messageText(raw json.RawMessage) string {

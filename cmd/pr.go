@@ -53,6 +53,7 @@ type prContext struct {
 	Input      ai.PullRequestInput
 	Summary    git.DiffSummary
 	Template   *github.PullRequestTemplate
+	Sessions   []sessionlog.Source
 }
 
 func runPRCreate(cmd *cobra.Command, opts prOptions, deps dependencies) error {
@@ -230,12 +231,7 @@ func preparePR(ctx context.Context, deps dependencies, pr *prContext, cfg *confi
 			fmt.Fprintf(session.Err, "Warning: could not read some agent session logs: %v\n", err)
 		}
 		pr.Input.SessionContext = logs.Context
-		for _, source := range logs.Sources {
-			fmt.Fprintf(session.Err, "Using %s session log: %q\n", source.Agent, source.Path)
-		}
-		if logs.Truncated {
-			fmt.Fprintln(session.Err, "Warning: session context was truncated; retaining recent messages.")
-		}
+		pr.Sessions = logs.Sources
 	}
 	return nil
 }
@@ -299,7 +295,10 @@ func generatePR(client ai.Client, pr *prContext, opts prOptions, session *ui.Ses
 		if opts.Update {
 			prompt = "Update this pull request? (y)es / (e)dit / (p)rompt / (n)o"
 		}
-		return ui.NewPRTUI(session, client, pr.Input, pr.Summary, opts.Render, prompt).Run()
+		return ui.NewPRTUI(session, client, pr.Input, pr.Summary, pr.Sessions, opts.Render, prompt).Run()
+	}
+	if len(pr.Sessions) > 0 {
+		fmt.Fprintf(session.Err, "%s\n\n", ui.FormatPRContext(pr.Summary, pr.Input.CommitLog, pr.Sessions, session.ErrStyles))
 	}
 	content, err := client.GeneratePullRequestContent(session.Context, pr.Input)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/git"
+	"github.com/EkeMinusYou/gelf/internal/sessionlog"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -45,10 +46,25 @@ func TestPipedPRRevisionKeepsAllInputAndSummary(t *testing.T) {
 	session := NewSession(context.Background(), strings.NewReader("p\nshorten title\ny\n"), &out, io.Discard, false, false)
 	client := &fakeAI{}
 	summary := git.DiffSummary{Files: []git.FileDiff{{Name: "first.txt"}, {Name: "日本語.txt", AddedLines: 2}}}
-	tui := NewPRTUI(session, client, ai.PullRequestInput{Diff: "truncated diff"}, summary, false, "")
+	sources := []sessionlog.Source{{Agent: "Codex", Path: "/private/log-a.jsonl", ID: "codex-session-a"}, {Agent: "Claude", Path: "/private/log-b.jsonl", ID: "claude-session-b"}, {Agent: "Codex", Path: "/private/log-c.jsonl", ID: "codex-session-c"}}
+	input := ai.PullRequestInput{Diff: "truncated diff", CommitLog: "abc123 fix search", SessionContext: "user: Preserve compatibility"}
+	tui := NewPRTUI(session, client, input, summary, sources, false, "")
 	content, confirmed, err := tui.Run()
 	if err != nil || !confirmed || content.Title != "revised" || client.instructions != "shorten title" || !strings.Contains(out.String(), "日本語.txt (+2)") {
 		t.Fatalf("content=%+v confirmed=%v err=%v instructions=%q output=%q", content, confirmed, err, client.instructions, out.String())
+	}
+	display := out.String()
+	commits, sessions, generated := strings.Index(display, "🧾 Commits:"), strings.Index(display, "📚 Agent Sessions:"), strings.Index(display, "📝 Generated Pull Request:")
+	if commits < 0 || sessions <= commits || generated <= sessions || strings.Count(display, "📚 Agent Sessions:") != 1 || !strings.Contains(display, " • Codex (2 sessions)") || !strings.Contains(display, " • Claude (1 session)") || strings.Contains(display, "/private/log-") {
+		t.Fatalf("incorrect session context display: %q", display)
+	}
+	for _, row := range []string{"   ├─ codex-session-a", "   └─ codex-session-c", "   └─ claude-session-b"} {
+		if strings.Count(display, row) != 1 {
+			t.Fatalf("missing or duplicated session ID row %q: %q", row, display)
+		}
+	}
+	if client.input != input {
+		t.Fatalf("display metadata changed AI input: %+v", client.input)
 	}
 }
 
@@ -168,7 +184,7 @@ func TestPREditParsing(t *testing.T) {
 func TestPipedPREditRequiresTerminal(t *testing.T) {
 	var stderr bytes.Buffer
 	session := NewSession(context.Background(), strings.NewReader("e\ny\n"), io.Discard, &stderr, false, false)
-	content, confirmed, err := NewPRTUI(session, &fakeAI{}, ai.PullRequestInput{}, git.DiffSummary{}, false, "").Run()
+	content, confirmed, err := NewPRTUI(session, &fakeAI{}, ai.PullRequestInput{}, git.DiffSummary{}, nil, false, "").Run()
 	if err != nil || !confirmed || content.Title != "original" || !strings.Contains(stderr.String(), "interactive terminal") {
 		t.Fatalf("content=%+v confirmed=%v err=%v stderr=%q", content, confirmed, err, stderr.String())
 	}
