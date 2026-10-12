@@ -6,6 +6,7 @@ import (
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/git"
+	"github.com/EkeMinusYou/gelf/internal/sessionlog"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -15,7 +16,7 @@ type prModel struct {
 	aiClient       ai.Client
 	input          ai.PullRequestInput
 	diffSummary    git.DiffSummary
-	commitLines    []string
+	sessionSources []sessionlog.Source
 	render         bool
 	useColor       bool
 	renderedBody   string
@@ -24,17 +25,15 @@ type prModel struct {
 	confirmPrompt  string
 }
 
-func NewPRTUI(session *Session, aiClient ai.Client, input ai.PullRequestInput, summary git.DiffSummary, render bool, confirmPrompt string) *prModel {
-	commitLines := parseCommitLines(input.CommitLog)
-
+func NewPRTUI(session *Session, aiClient ai.Client, input ai.PullRequestInput, summary git.DiffSummary, sources []sessionlog.Source, render bool, confirmPrompt string) *prModel {
 	return &prModel{
 		session: session, styles: session.Styles,
-		aiClient:    aiClient,
-		input:       input,
-		diffSummary: summary,
-		commitLines: commitLines,
-		render:      render,
-		useColor:    session.UseColor,
+		aiClient:       aiClient,
+		input:          input,
+		diffSummary:    summary,
+		sessionSources: sources,
+		render:         render,
+		useColor:       session.UseColor,
 		confirmPrompt: func() string {
 			if strings.TrimSpace(confirmPrompt) == "" {
 				return "Create this pull request? (y)es / (e)dit / (p)rompt / (n)o"
@@ -46,7 +45,7 @@ func NewPRTUI(session *Session, aiClient ai.Client, input ai.PullRequestInput, s
 
 func (m *prModel) Run() (*ai.PullRequestContent, bool, error) {
 	ctx := m.session.Context
-	loadingContext := formatPRContext(m.diffSummary, m.commitLines, m.styles)
+	loadingContext := FormatPRContext(m.diffSummary, m.input.CommitLog, m.sessionSources, m.session.ErrStyles)
 	stopSpinner := m.startLoadingIndicator(loadingContext)
 	content, err := m.aiClient.GeneratePullRequestContent(ctx, m.input)
 	stopSpinner()
@@ -178,7 +177,7 @@ func (m *prModel) buildPRContent() string {
 
 	sections := []string{}
 	if !m.printedContext {
-		context := formatPRContext(m.diffSummary, m.commitLines, m.styles)
+		context := FormatPRContext(m.diffSummary, m.input.CommitLog, m.sessionSources, m.styles)
 		if context != "" {
 			sections = append(sections, context)
 		}
@@ -188,7 +187,8 @@ func (m *prModel) buildPRContent() string {
 	return strings.Join(sections, "\n\n")
 }
 
-func formatPRContext(summary git.DiffSummary, commitLines []string, styles Styles) string {
+// FormatPRContext keeps interactive and non-interactive context displays consistent.
+func FormatPRContext(summary git.DiffSummary, commitLog string, sources []sessionlog.Source, styles Styles) string {
 	sections := []string{}
 
 	diffSummary := formatDiffSummary(summary, styles)
@@ -196,11 +196,46 @@ func formatPRContext(summary git.DiffSummary, commitLines []string, styles Style
 		sections = append(sections, diffSummary)
 	}
 
-	if len(commitLines) > 0 {
+	if commitLines := parseCommitLines(commitLog); len(commitLines) > 0 {
 		sections = append(sections, formatPRCommitLog(commitLines, styles))
+	}
+	if len(sources) > 0 {
+		sections = append(sections, formatPRSessionSources(sources, styles))
 	}
 
 	return strings.Join(sections, "\n\n")
+}
+
+func formatPRSessionSources(sources []sessionlog.Source, styles Styles) string {
+	var agents []string
+	groups := make(map[string][]sessionlog.Source)
+	for _, source := range sources {
+		if len(groups[source.Agent]) == 0 {
+			agents = append(agents, source.Agent)
+		}
+		groups[source.Agent] = append(groups[source.Agent], source)
+	}
+	parts := []string{styles.Diff.Render("📚 Agent Sessions:")}
+	for _, agent := range agents {
+		sessions := groups[agent]
+		label := "sessions"
+		if len(sessions) == 1 {
+			label = "session"
+		}
+		parts = append(parts, fmt.Sprintf(" • %s %s", styles.File.Render(displayName(agent)), styles.Diff.Render(fmt.Sprintf("(%d %s)", len(sessions), label))))
+		for i, source := range sessions {
+			connector := "├─"
+			if i == len(sessions)-1 {
+				connector = "└─"
+			}
+			id := source.ID
+			if id == "" {
+				id = "ID unavailable"
+			}
+			parts = append(parts, styles.Subtle.Render("   "+connector+" ")+styles.Diff.Render(displayName(id)))
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func formatPRCommitLog(commitLines []string, styles Styles) string {
