@@ -6,6 +6,7 @@ gelf is a Go-based CLI tool that generates Git commit messages and AI-assisted p
 
 - 🤖 **AI-Powered**: Intelligent commit message generation using Vertex AI (Gemini)
 - 📝 **PR Creation**: Generate pull request titles and descriptions with AI
+- 🔗 **GitHub and Gitea**: Create and update PRs on GitHub or self-hosted Gitea
 - 💬 **Interactive Revisions**: Refine generated PR titles and bodies with chat-style instructions
 - 🎨 **Clean TUI**: Simple and intuitive user interface built with Bubble Tea  
 - ⚡ **Fast Processing**: Real-time progress indicators during generation
@@ -20,7 +21,8 @@ gelf is a Go-based CLI tool that generates Git commit messages and AI-assisted p
 - Go 1.27.1 or higher
 - Google Cloud account with Vertex AI API enabled
 - Git (required for commit and PR operations)
-- GitHub CLI (`gh`), authenticated with `gh auth login` (required for PR operations)
+- For GitHub PRs: GitHub CLI (`gh`), authenticated with `gh auth login`
+- For Gitea PRs: Current Gitea CLI (`tea`, with `tea api` support), authenticated with `tea login add`
 
 ### Build from Source
 
@@ -150,6 +152,8 @@ Generate pull requests with AI-generated titles and descriptions based on commit
 gelf pr create
 ```
 
+The hosting provider is detected automatically from the actual push URL. `github.com` (including SSH via `ssh.github.com`) selects GitHub directly. Other hosts are matched against saved tea logins and the host entries reported by `gh auth status`. This also supports self-hosted Gitea and GitHub Enterprise. If both providers match or neither can be identified, gelf stops before fetching, pushing, or AI generation and asks for `--provider github` or `--provider gitea`. Explicit provider flags or `pr.provider` settings override detection; `auto` is the default.
+
 The generated body follows the PR template when available; otherwise, it briefly explains the purpose and key changes, using headings or bullet points when helpful rather than fixed sections.
 
 Session log discovery is disabled by default. Enable it with `--session-logs` or `pr.session_logs: true` in `gelf.yml` to automatically discover recent local Claude Code and Codex CLI session logs to explain the intent and design rationale behind the changes. It reads `~/.claude/projects` and `~/.codex/sessions`, respecting `CLAUDE_CONFIG_DIR` and `CODEX_HOME`. Only conversations from the current Git worktree (including its subdirectories, excluding nested repositories) are eligible. Recorded branch names must match the local branch; logs without branch metadata are matched by worktree alone.
@@ -184,6 +188,7 @@ After the PR title and description are generated, the interactive prompt lets yo
 - Press `n` (or `Esc` / `q`) to cancel without creating a PR
 
 Options:
+- `--provider auto|github|gitea` to select the PR hosting provider (overrides `pr.provider`; default: `auto`)
 - `--draft` to create a draft PR
 - `--dry-run` to print the generated title/body without pushing or creating/updating a PR (required refs are fetched)
 - `--render` to render markdown in dry-run output (default: true)
@@ -197,6 +202,35 @@ Options:
 - `--body-language` to set the language for PR body only
 - `--yes` to approve normal push and PR creation/update automatically (also skips revisions; force push still requires confirmation)
 - `--update` to update the matching open PR, or create a new one if none exists
+
+### Gitea
+
+Authenticate with tea, then use the same PR command. A matching saved login enables automatic Gitea detection without a provider flag or project configuration:
+
+```bash
+tea login add
+gelf pr create
+gelf pr create --update
+gelf pr create --dry-run
+```
+
+To explicitly select Gitea or a saved account for a project, add these optional overrides to its `gelf.yml`:
+
+```yaml
+pr:
+  provider: gitea
+
+gitea:
+  login: "work"  # optional saved tea login name
+```
+
+gelf selects the tea login matching the actual push URL, including a remote's separate push URL. HTTP(S) remotes match the saved server URL, including its port and subpath. SSH remotes match the server hostname or the login's SSH host; SSH transport ports are independent of the web server port. If several saved logins match, set `gitea.login` to select one. An unknown login or a login for a different server stops the operation before fetching, pushing, or AI generation. Authentication, server URLs, and TLS settings come from tea; gelf does not need a separate token or server URL setting. Git fetch/push still use your Git credentials.
+
+Gitea uses the same push-target selection, base/head fetching, confirmation, force-push lease, AI generation, revisions, and session-log options. A fork targets its parent repository, including forks with a different repository name. Existing open PRs must match the exact head repository and branch; updates retain their base branch.
+
+Local Markdown PR templates in `.gitea` take precedence over `.github`, repository-root, and `docs` templates. With no local template, generation proceeds without one. Gitea has no organization-wide default template lookup. See [Gitea's template documentation](https://docs.gitea.com/usage/issues-prs/issue-pull-request-templates/).
+
+Gitea's PR API uses title prefixes for drafts. `--draft` adds `WIP: `, and updating an existing draft retains that status by keeping a WIP prefix. This requires the server's standard `WIP:` work-in-progress prefix to be enabled; custom draft prefixes are not supported. See [Gitea's pull request configuration](https://docs.gitea.com/administration/config-cheat-sheet/#repository---pull-request-repositorypull-request).
 
 ### Command Options
 
@@ -316,6 +350,7 @@ This allows you to set a global default language, override it for specific comma
 
 - **Commit Target**: Staged changes only (`git diff --staged`)
 - **PR Target**: Committed changes between base branch and `HEAD`
+- **PR Hosts**: GitHub (via `gh`) and Gitea (via `tea api`)
 - **AI Provider**: Vertex AI (Gemini models)
 - **Default Flash Model**: gemini-3.8-flash
 - **Default Pro Model**: gemini-3.1-pro-preview
@@ -336,6 +371,12 @@ internal/
 │   ├── branch.go    # Branch and commit range helpers
 │   ├── push.go      # Push target resolution, status, and leases
 │   └── remote.go    # Remote URLs and base ref fetching
+├── forge/
+│   ├── forge.go     # Shared hosting interface and repository/PR types
+│   └── template.go  # Local PR template discovery
+├── gitea/
+│   ├── gitea.go     # Gitea repository and PR operations via tea
+│   └── template.go  # Gitea PR template resolution
 ├── github/
 │   ├── gh.go        # GitHub repository and PR API operations
 │   └── template.go  # GitHub PR template resolution
@@ -399,6 +440,7 @@ commit:
                          # Unsupported levels fall back automatically (minimal → low → model default), e.g. for Pro or Gemini 2.5
 
 pr:
+  provider: string       # PR hosting provider: "auto", "github", or "gitea" (default: auto)
   model: string          # Model for pull requests: "flash", "pro", or custom (default: pro)
   language: string       # Language for pull request titles and descriptions (inherits from global if not set)
   title_language: string # Language for PR title only (inherits from pr.language if not set)
@@ -407,6 +449,9 @@ pr:
   session_logs: boolean # Automatically use recent Claude/Codex session context (default: false)
   session_log_count: number # Maximum recent sessions across both agents (default: 3; must be positive)
   max_session_log_bytes: number # Maximum session context size (default: 20000; negative is invalid)
+
+gitea:
+  login: string          # Optional saved tea login name (selected from the push URL when omitted)
 
 color: string            # Color output setting: "auto", "always", or "never" (default: always)
 ```

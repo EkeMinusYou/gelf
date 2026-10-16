@@ -7,6 +7,7 @@ import (
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/config"
+	"github.com/EkeMinusYou/gelf/internal/forge"
 	"github.com/EkeMinusYou/gelf/internal/git"
 	"github.com/EkeMinusYou/gelf/internal/github"
 	"github.com/EkeMinusYou/gelf/internal/sessionlog"
@@ -18,6 +19,7 @@ type prOptions struct {
 	Draft, DryRun, Render, NoRender, Yes, Update, SessionLogs, NoSessionLogs bool
 	SessionLogCount                                                          int
 	Model, Language, TitleLanguage, BodyLanguage                             string
+	Provider                                                                 string
 }
 
 func newPRCommand(deps dependencies) *cobra.Command {
@@ -36,6 +38,7 @@ func newPRCommand(deps dependencies) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Yes, "yes", false, "Approve normal push and PR creation (force push still requires confirmation)")
 	cmd.Flags().BoolVar(&opts.Update, "update", false, "Update the matching open pull request, or create one if none exists")
 	cmd.Flags().StringVar(&opts.Model, "model", "", "Override default model for PR generation")
+	cmd.Flags().StringVar(&opts.Provider, "provider", "", "PR hosting provider: auto, github, or gitea (default: auto; overrides configuration)")
 	cmd.Flags().StringVar(&opts.Language, "language", "", "Language for PR generation")
 	cmd.Flags().StringVar(&opts.TitleLanguage, "title-language", "", "Language for PR title")
 	cmd.Flags().StringVar(&opts.BodyLanguage, "body-language", "", "Language for PR body")
@@ -44,15 +47,15 @@ func newPRCommand(deps dependencies) *cobra.Command {
 }
 
 type prContext struct {
-	Base, Head github.RepoInfo
+	Base, Head forge.RepoInfo
 	BaseBranch string
 	Target     git.PushTarget
 	Status     git.PushStatus
-	Existing   *github.PullRequestInfo
-	GitHub     *github.Client
+	Existing   *forge.PullRequestInfo
+	Forge      forge.Client
 	Input      ai.PullRequestInput
 	Summary    git.DiffSummary
-	Template   *github.PullRequestTemplate
+	Template   *forge.PullRequestTemplate
 	Sessions   []sessionlog.Source
 }
 
@@ -65,6 +68,12 @@ func runPRCreate(cmd *cobra.Command, opts prOptions, deps dependencies) error {
 	// Resolve CLI overrides on a copy so shared configuration is not mutated.
 	resolved := *cfg
 	cfg = &resolved
+	if cmd.Flags().Changed("provider") {
+		cfg.PRProvider = opts.Provider
+		if cfg.PRProvider != "auto" && cfg.PRProvider != "github" && cfg.PRProvider != "gitea" {
+			return fmt.Errorf("invalid --provider %q: expected auto, github, or gitea", cfg.PRProvider)
+		}
+	}
 	if cmd.Flags().Changed("session-logs") {
 		cfg.PRSessionLogs = opts.SessionLogs
 	}
@@ -76,7 +85,7 @@ func runPRCreate(cmd *cobra.Command, opts prOptions, deps dependencies) error {
 	}
 	session := ui.NewSession(ctx, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg.UseColor(cmd.OutOrStdout()), cfg.UseColor(cmd.ErrOrStderr()))
 	opts.Render = opts.Render && !opts.NoRender
-	pr, err := resolvePR(ctx, deps)
+	pr, err := resolvePR(ctx, deps, cfg)
 	if err != nil {
 		return err
 	}
@@ -112,24 +121,7 @@ func runPRCreate(cmd *cobra.Command, opts prOptions, deps dependencies) error {
 	return publishPR(ctx, pr, content, opts, session)
 }
 
-func resolvePR(ctx context.Context, deps dependencies) (*prContext, error) {
-	current, parent, err := deps.GitHub.Repo(ctx, "")
-	if err != nil {
-		return nil, err
-	}
-	base := current
-	if parent != nil {
-		base = parent
-	}
-	if base.DefaultBranch == "" {
-		base, _, err = deps.GitHub.Repo(ctx, base.GHName())
-		if err != nil {
-			return nil, err
-		}
-	}
-	if base.DefaultBranch == "" {
-		return nil, fmt.Errorf("base repository has no default branch")
-	}
+func resolvePR(ctx context.Context, deps dependencies, cfg *config.Config) (*prContext, error) {
 	branch, err := deps.Git.CurrentBranch(ctx)
 	if err != nil {
 		return nil, err
@@ -142,13 +134,33 @@ func resolvePR(ctx context.Context, deps dependencies) (*prContext, error) {
 	if err != nil {
 		return nil, err
 	}
-	head, err := github.RepoInfoFromRemoteURL(pushURL)
+	host, err := resolvePRHost(ctx, deps, cfg, pushURL)
 	if err != nil {
 		return nil, err
 	}
-	gh := *deps.GitHub
-	gh.Host = base.Host
-	existing, err := gh.FindPullRequest(ctx, *base, *head, target.Branch)
+	client, head := host.Client, host.Head
+	current, parent, err := client.Repo(ctx, host.RepoName)
+	if err != nil {
+		return nil, err
+	}
+	base := current
+	if parent != nil {
+		base = parent
+	}
+	if base.DefaultBranch == "" {
+		base, _, err = client.Repo(ctx, base.QualifiedName())
+		if err != nil {
+			return nil, err
+		}
+	}
+	if base.DefaultBranch == "" {
+		return nil, fmt.Errorf("base repository has no default branch")
+	}
+	if gh, ok := client.(*github.Client); ok {
+		// Keep GitHub's default-repository selection, including gh repo set-default.
+		gh.Host = base.Host
+	}
+	existing, err := client.FindPullRequest(ctx, *base, *head, target.Branch)
 	if err != nil {
 		return nil, err
 	}
@@ -156,11 +168,11 @@ func resolvePR(ctx context.Context, deps dependencies) (*prContext, error) {
 	if existing != nil {
 		baseBranch = existing.Base.Ref
 	}
-	return &prContext{Base: *base, Head: *head, BaseBranch: baseBranch, Target: target, Existing: existing, GitHub: &gh}, nil
+	return &prContext{Base: *base, Head: *head, BaseBranch: baseBranch, Target: target, Existing: existing, Forge: client}, nil
 }
 
 func preparePR(ctx context.Context, deps dependencies, pr *prContext, cfg *config.Config, opts prOptions, session *ui.Session) error {
-	remote, err := baseRemote(ctx, deps.Git, pr.Base)
+	remote, err := baseRemote(ctx, deps.Git, pr.Forge, pr.Base)
 	if err != nil {
 		return err
 	}
@@ -199,7 +211,7 @@ func preparePR(ctx context.Context, deps dependencies, pr *prContext, cfg *confi
 	if err != nil {
 		return err
 	}
-	pr.Template, err = pr.GitHub.FindPullRequestTemplate(ctx, root, pr.Base.Owner)
+	pr.Template, err = pr.Forge.FindPullRequestTemplate(ctx, root, pr.Base.Owner)
 	if err != nil {
 		return fmt.Errorf("failed to resolve pull request template: %w", err)
 	}
@@ -236,7 +248,7 @@ func preparePR(ctx context.Context, deps dependencies, pr *prContext, cfg *confi
 	return nil
 }
 
-func baseRemote(ctx context.Context, repo *git.Repository, base github.RepoInfo) (string, error) {
+func baseRemote(ctx context.Context, repo *git.Repository, client forge.Client, base forge.RepoInfo) (string, error) {
 	remotes, err := repo.Remotes(ctx)
 	if err != nil {
 		return "", err
@@ -246,10 +258,13 @@ func baseRemote(ctx context.Context, repo *git.Repository, base github.RepoInfo)
 		if err != nil {
 			return "", err
 		}
-		info, err := github.RepoInfoFromRemoteURL(remoteURL)
+		info, err := client.ParseRemoteURL(remoteURL)
 		if err == nil && info.Equal(base) {
 			return remote, nil
 		}
+	}
+	if base.CloneURL != "" {
+		return base.CloneURL, nil
 	}
 	if base.URL == "" {
 		return "", fmt.Errorf("no remote or clone URL found for %s", base.FullName())
@@ -329,12 +344,12 @@ func publishPR(ctx context.Context, pr *prContext, content *ai.PullRequestConten
 	}
 	stop := session.Spinner(message, false)
 	defer stop()
-	var published *github.PullRequestInfo
+	var published *forge.PullRequestInfo
 	var err error
 	if opts.Update {
-		published, err = pr.GitHub.Update(ctx, pr.Base, pr.Existing.Number, content)
+		published, err = pr.Forge.Update(ctx, pr.Base, pr.Existing.Number, content)
 	} else {
-		published, err = pr.GitHub.Create(ctx, pr.Base, pr.Head, pr.Target.Branch, pr.BaseBranch, content, opts.Draft)
+		published, err = pr.Forge.Create(ctx, pr.Base, pr.Head, pr.Target.Branch, pr.BaseBranch, content, opts.Draft)
 	}
 	if err != nil {
 		return err

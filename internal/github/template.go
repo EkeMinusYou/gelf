@@ -4,22 +4,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
-)
 
-type PullRequestTemplate struct {
-	Source  string
-	Path    string
-	Content string
-}
+	"github.com/EkeMinusYou/gelf/internal/forge"
+)
 
 var templateFileCandidates = []string{
 	".github/PULL_REQUEST_TEMPLATE.md",
@@ -39,8 +32,8 @@ var templateDirCandidates = []string{
 	"docs/pull_request_template",
 }
 
-func (c *Client) FindPullRequestTemplate(ctx context.Context, repoRoot, owner string) (*PullRequestTemplate, error) {
-	localTemplate, err := findLocalPullRequestTemplate(repoRoot)
+func (c *Client) FindPullRequestTemplate(ctx context.Context, repoRoot, owner string) (*forge.PullRequestTemplate, error) {
+	localTemplate, err := forge.FindLocalPullRequestTemplate(repoRoot, templateFileCandidates, templateDirCandidates)
 	if err != nil {
 		return nil, err
 	}
@@ -59,100 +52,12 @@ func (c *Client) FindPullRequestTemplate(ctx context.Context, repoRoot, owner st
 	return c.findOrgPullRequestTemplate(ctx, token, owner)
 }
 
-func findLocalPullRequestTemplate(repoRoot string) (*PullRequestTemplate, error) {
-	for _, relPath := range templateFileCandidates {
-		path := filepath.Join(repoRoot, relPath)
-		info, err := os.Stat(path)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return nil, fmt.Errorf("failed to inspect template %s: %w", relPath, err)
-		}
-		if info.IsDir() {
-			continue
-		}
-
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read template file %s: %w", relPath, err)
-		}
-
-		return &PullRequestTemplate{
-			Source:  "repo",
-			Path:    relPath,
-			Content: string(content),
-		}, nil
-	}
-
-	for _, relDir := range templateDirCandidates {
-		dirPath := filepath.Join(repoRoot, relDir)
-		info, err := os.Stat(dirPath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return nil, fmt.Errorf("failed to inspect template directory %s: %w", relDir, err)
-		}
-		if !info.IsDir() {
-			continue
-		}
-
-		selected, content, err := selectTemplateFromDir(dirPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read template directory %s: %w", relDir, err)
-		}
-		if selected == "" {
-			continue
-		}
-
-		return &PullRequestTemplate{
-			Source:  "repo",
-			Path:    filepath.ToSlash(filepath.Join(relDir, selected)),
-			Content: content,
-		}, nil
-	}
-
-	return nil, nil
-}
-
-func selectTemplateFromDir(dirPath string) (string, string, error) {
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		return "", "", err
-	}
-
-	var candidates []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if isTemplateFile(name) {
-			candidates = append(candidates, name)
-		}
-	}
-
-	if len(candidates) == 0 {
-		return "", "", nil
-	}
-
-	sort.Strings(candidates)
-	selected := candidates[0]
-	content, err := os.ReadFile(filepath.Join(dirPath, selected))
-	if err != nil {
-		return "", "", err
-	}
-
-	return selected, string(content), nil
-}
-
 func isTemplateFile(name string) bool {
 	lower := strings.ToLower(name)
 	return strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") || strings.HasSuffix(lower, ".txt")
 }
 
-func (c *Client) findOrgPullRequestTemplate(ctx context.Context, token, owner string) (*PullRequestTemplate, error) {
+func (c *Client) findOrgPullRequestTemplate(ctx context.Context, token, owner string) (*forge.PullRequestTemplate, error) {
 	orgRepo := ".github"
 
 	for _, relPath := range templateFileCandidates {
@@ -161,7 +66,7 @@ func (c *Client) findOrgPullRequestTemplate(ctx context.Context, token, owner st
 			return nil, err
 		}
 		if found {
-			return &PullRequestTemplate{
+			return &forge.PullRequestTemplate{
 				Source:  "org",
 				Path:    relPath,
 				Content: content,
@@ -178,7 +83,7 @@ func (c *Client) findOrgPullRequestTemplate(ctx context.Context, token, owner st
 			continue
 		}
 
-		return &PullRequestTemplate{
+		return &forge.PullRequestTemplate{
 			Source:  "org",
 			Path:    selected.Path,
 			Content: selected.Content,

@@ -9,19 +9,21 @@ import (
 	"testing"
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
+	"github.com/EkeMinusYou/gelf/internal/forge"
 	"github.com/EkeMinusYou/gelf/internal/process"
 	"github.com/EkeMinusYou/gelf/internal/testutil"
 )
 
 func TestRepoAndRemoteIdentity(t *testing.T) {
-	for _, remote := range []string{"git@github.com:owner/repo.git", "ssh://git@github.com/owner/repo.git", "https://github.com/owner/repo.git", "https://github.com/owner/repo"} {
-		info, err := RepoInfoFromRemoteURL(remote)
+	parser := NewClient(nil)
+	for _, remote := range []string{"git@github.com:owner/repo.git", "ssh://git@github.com/owner/repo.git", "https://github.com/owner/repo.git", "https://github.com/owner/repo", "ssh://git@ssh.github.com:443/owner/repo.git"} {
+		info, err := parser.ParseRemoteURL(remote)
 		if err != nil || info.Host != "github.com" || info.FullName() != "owner/repo" {
 			t.Fatalf("%s: %+v %v", remote, info, err)
 		}
 	}
 	for _, remote := range []string{"", "/tmp/repo.git", "https://github.com/owner/repo/extra"} {
-		if _, err := RepoInfoFromRemoteURL(remote); err == nil {
+		if _, err := parser.ParseRemoteURL(remote); err == nil {
 			t.Fatalf("invalid URL accepted: %q", remote)
 		}
 	}
@@ -35,8 +37,8 @@ func TestRepoAndRemoteIdentity(t *testing.T) {
 }
 
 func TestFindPRRequiresExactOpenHeadAcrossPages(t *testing.T) {
-	base := RepoInfo{Host: "github.com", Owner: "base", Name: "repo"}
-	head := RepoInfo{Host: "github.com", Owner: "fork", Name: "repo"}
+	base := forge.RepoInfo{Host: "github.com", Owner: "base", Name: "repo"}
+	head := forge.RepoInfo{Host: "github.com", Owner: "fork", Name: "repo"}
 	data := `[[{"number":1,"state":"open","head":{"ref":"feature","repo":{"full_name":"base/repo"}}},{"number":2,"state":"merged","head":{"ref":"feature","repo":{"full_name":"fork/repo"}}}],[{"number":3,"state":"open","draft":true,"html_url":"https://github.com/base/repo/pull/3","head":{"ref":"feature","repo":{"full_name":"fork/repo"}},"base":{"ref":"release"}}]]`
 	client := NewClient(testutil.RunnerFunc(func(ctx context.Context, name string, args []string, stdin io.Reader) (process.Result, error) {
 		joined := strings.Join(args, " ")
@@ -61,8 +63,8 @@ func TestFindPRRequiresExactOpenHeadAcrossPages(t *testing.T) {
 }
 
 func TestPublishPinsRepositoryAndHead(t *testing.T) {
-	base := RepoInfo{Host: "github.example.com", Owner: "parent", Name: "repo"}
-	head := RepoInfo{Host: "github.example.com", Owner: "fork", Name: "repo"}
+	base := forge.RepoInfo{Host: "github.example.com", Owner: "parent", Name: "repo"}
+	head := forge.RepoInfo{Host: "github.example.com", Owner: "fork", Name: "repo"}
 	client := NewClient(testutil.RunnerFunc(func(ctx context.Context, name string, args []string, stdin io.Reader) (process.Result, error) {
 		joined := strings.Join(args, " ")
 		var payload map[string]any
@@ -85,7 +87,7 @@ func TestPublishPinsRepositoryAndHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Deleted head repositories cannot be used as an identity fallback.
-	var pr PullRequestInfo
+	var pr forge.PullRequestInfo
 	if err := json.Unmarshal([]byte(`{"head":{"ref":"feature","repo":null}}`), &pr); err != nil {
 		t.Fatal(err)
 	}
