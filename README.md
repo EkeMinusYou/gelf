@@ -22,7 +22,7 @@ gelf is a Go-based CLI tool that generates Git commit messages and AI-assisted p
 - Google Cloud account with Vertex AI API enabled
 - Git (required for commit and PR operations)
 - For GitHub PRs: GitHub CLI (`gh`), authenticated with `gh auth login`
-- For Gitea PRs: Gitea CLI (`tea` 0.16.0 or later, with `tea api` support), authenticated with `tea login add`
+- For Gitea PRs: Current Gitea CLI (`tea`, with `tea api` support), authenticated with `tea login add`
 
 ### Build from Source
 

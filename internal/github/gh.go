@@ -25,19 +25,12 @@ func NewClient(runner process.Runner) *Client {
 	return &Client{Runner: runner, HTTP: &http.Client{Timeout: 30 * time.Second}, Host: "github.com"}
 }
 
-type RepoInfo = forge.RepoInfo
-type PullRequestInfo = forge.PullRequestInfo
-
-func RepoInfoFromRemoteURL(remoteURL string) (*RepoInfo, error) {
+func (c *Client) ParseRemoteURL(remoteURL string) (*forge.RepoInfo, error) {
 	info, err := forge.RepoInfoFromRemoteURL(remoteURL)
 	if err == nil && info.Host == "ssh.github.com" {
 		info.Host = "github.com"
 	}
 	return info, err
-}
-
-func (c *Client) ParseRemoteURL(remoteURL string) (*RepoInfo, error) {
-	return RepoInfoFromRemoteURL(remoteURL)
 }
 
 // HasHost identifies configured GitHub hosts without exporting authentication tokens.
@@ -75,7 +68,7 @@ func (c *Client) AuthToken(ctx context.Context) (string, error) {
 	return token, nil
 }
 
-func (c *Client) Repo(ctx context.Context, name string) (*RepoInfo, *RepoInfo, error) {
+func (c *Client) Repo(ctx context.Context, name string) (*forge.RepoInfo, *forge.RepoInfo, error) {
 	args := []string{"repo", "view"}
 	if name != "" {
 		args = append(args, name)
@@ -103,7 +96,7 @@ func (c *Client) Repo(ctx context.Context, name string) (*RepoInfo, *RepoInfo, e
 		return nil, nil, err
 	}
 	host := c.Host
-	convert := func(data repoJSON) (*RepoInfo, error) {
+	convert := func(data repoJSON) (*forge.RepoInfo, error) {
 		if data.Owner.Login == "" || data.Name == "" {
 			return nil, fmt.Errorf("repository info is incomplete")
 		}
@@ -111,7 +104,7 @@ func (c *Client) Repo(ctx context.Context, name string) (*RepoInfo, *RepoInfo, e
 		if data.URL == "" {
 			data.URL = "https://" + host + "/" + data.Owner.Login + "/" + data.Name
 		}
-		info, err := RepoInfoFromRemoteURL(data.URL)
+		info, err := c.ParseRemoteURL(data.URL)
 		if err != nil {
 			return nil, err
 		}
@@ -134,7 +127,7 @@ func (c *Client) Repo(ctx context.Context, name string) (*RepoInfo, *RepoInfo, e
 	return current, parent, err
 }
 
-func (c *Client) FindPullRequest(ctx context.Context, base, head RepoInfo, branch string) (*PullRequestInfo, error) {
+func (c *Client) FindPullRequest(ctx context.Context, base, head forge.RepoInfo, branch string) (*forge.PullRequestInfo, error) {
 	if base.Host != head.Host {
 		return nil, fmt.Errorf("base and head repositories must use the same GitHub host")
 	}
@@ -144,11 +137,11 @@ func (c *Client) FindPullRequest(ctx context.Context, base, head RepoInfo, branc
 	if err != nil {
 		return nil, err
 	}
-	var pages [][]PullRequestInfo
+	var pages [][]forge.PullRequestInfo
 	if err := json.Unmarshal([]byte(result.Stdout), &pages); err != nil {
 		return nil, fmt.Errorf("failed to parse pull request list: %w", err)
 	}
-	var match *PullRequestInfo
+	var match *forge.PullRequestInfo
 	for _, page := range pages {
 		for _, pr := range page {
 			if pr.State != "open" || pr.Head.Ref != branch || pr.Head.Repo == nil || !strings.EqualFold(pr.Head.Repo.FullName, head.FullName()) {
@@ -165,7 +158,7 @@ func (c *Client) FindPullRequest(ctx context.Context, base, head RepoInfo, branc
 }
 
 // Create uses the REST API so organization-owned forks and head_repo are explicit.
-func (c *Client) Create(ctx context.Context, base, head RepoInfo, branch, baseBranch string, content *ai.PullRequestContent, draft bool) (*PullRequestInfo, error) {
+func (c *Client) Create(ctx context.Context, base, head forge.RepoInfo, branch, baseBranch string, content *ai.PullRequestContent, draft bool) (*forge.PullRequestInfo, error) {
 	payload := map[string]any{"title": content.Title, "body": content.Body, "head": head.Owner + ":" + branch, "base": baseBranch, "draft": draft, "maintainer_can_modify": true}
 	if !base.Equal(head) {
 		payload["head_repo"] = head.Name
@@ -173,11 +166,11 @@ func (c *Client) Create(ctx context.Context, base, head RepoInfo, branch, baseBr
 	return c.writePR(ctx, base, "POST", "repos/"+base.FullName()+"/pulls", payload)
 }
 
-func (c *Client) Update(ctx context.Context, base RepoInfo, number int, content *ai.PullRequestContent) (*PullRequestInfo, error) {
+func (c *Client) Update(ctx context.Context, base forge.RepoInfo, number int, content *ai.PullRequestContent) (*forge.PullRequestInfo, error) {
 	return c.writePR(ctx, base, "PATCH", fmt.Sprintf("repos/%s/pulls/%d", base.FullName(), number), map[string]any{"title": content.Title, "body": content.Body})
 }
 
-func (c *Client) writePR(ctx context.Context, base RepoInfo, method, endpoint string, payload map[string]any) (*PullRequestInfo, error) {
+func (c *Client) writePR(ctx context.Context, base forge.RepoInfo, method, endpoint string, payload map[string]any) (*forge.PullRequestInfo, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -187,7 +180,7 @@ func (c *Client) writePR(ctx context.Context, base RepoInfo, method, endpoint st
 	if err != nil {
 		return nil, err
 	}
-	var pr PullRequestInfo
+	var pr forge.PullRequestInfo
 	if err := json.Unmarshal([]byte(result.Stdout), &pr); err != nil {
 		return nil, fmt.Errorf("failed to parse PR publication response: %w", err)
 	}

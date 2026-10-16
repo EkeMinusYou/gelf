@@ -247,7 +247,7 @@ func (c *Client) request(ctx context.Context, method, endpoint string, payload, 
 		}
 	}
 	if status == 0 {
-		return fmt.Errorf("tea api did not report an HTTP status; use tea 0.16.0 or later")
+		return fmt.Errorf("tea api did not report an HTTP status")
 	}
 	if status < 200 || status >= 300 {
 		var data struct {
