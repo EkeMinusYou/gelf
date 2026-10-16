@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
+	"github.com/EkeMinusYou/gelf/internal/forge"
 	"github.com/EkeMinusYou/gelf/internal/process"
 )
 
@@ -24,35 +25,42 @@ func NewClient(runner process.Runner) *Client {
 	return &Client{Runner: runner, HTTP: &http.Client{Timeout: 30 * time.Second}, Host: "github.com"}
 }
 
-type RepoInfo struct {
-	Host          string
-	Owner         string
-	Name          string
-	DefaultBranch string
-	URL           string
+type RepoInfo = forge.RepoInfo
+type PullRequestInfo = forge.PullRequestInfo
+
+func RepoInfoFromRemoteURL(remoteURL string) (*RepoInfo, error) {
+	info, err := forge.RepoInfoFromRemoteURL(remoteURL)
+	if err == nil && info.Host == "ssh.github.com" {
+		info.Host = "github.com"
+	}
+	return info, err
 }
 
-func (r RepoInfo) FullName() string { return r.Owner + "/" + r.Name }
-func (r RepoInfo) GHName() string   { return r.Host + "/" + r.FullName() }
-func (r RepoInfo) Equal(other RepoInfo) bool {
-	return strings.EqualFold(r.Host, other.Host) && strings.EqualFold(r.FullName(), other.FullName())
+func (c *Client) ParseRemoteURL(remoteURL string) (*RepoInfo, error) {
+	return RepoInfoFromRemoteURL(remoteURL)
 }
 
-type PullRequestInfo struct {
-	Number  int    `json:"number"`
-	Title   string `json:"title"`
-	URL     string `json:"html_url"`
-	State   string `json:"state"`
-	IsDraft bool   `json:"draft"`
-	Head    struct {
-		Ref  string `json:"ref"`
-		Repo *struct {
-			FullName string `json:"full_name"`
-		} `json:"repo"`
-	} `json:"head"`
-	Base struct {
-		Ref string `json:"ref"`
-	} `json:"base"`
+// HasHost identifies configured GitHub hosts without exporting authentication tokens.
+// Entries remain useful for detection when their credentials are expired or offline.
+func (c *Client) HasHost(ctx context.Context, host string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	result, err := c.Runner.Run(ctx, "gh", []string{"auth", "status", "--hostname", host, "--active", "--json", "hosts"}, nil)
+	if err != nil {
+		return false, err
+	}
+	var data struct {
+		Hosts map[string][]json.RawMessage `json:"hosts"`
+	}
+	if err := json.Unmarshal([]byte(result.Stdout), &data); err != nil {
+		return false, fmt.Errorf("failed to parse GitHub authentication hosts: %w", err)
+	}
+	for name, entries := range data.Hosts {
+		if strings.EqualFold(name, host) && len(entries) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (c *Client) AuthToken(ctx context.Context) (string, error) {
@@ -190,29 +198,4 @@ func (c *Client) writePR(ctx context.Context, base RepoInfo, method, endpoint st
 		pr.URL = fmt.Sprintf("https://%s/%s/pull/%d", base.Host, base.FullName(), pr.Number)
 	}
 	return &pr, nil
-}
-
-func RepoInfoFromRemoteURL(remoteURL string) (*RepoInfo, error) {
-	remoteURL = strings.TrimSpace(remoteURL)
-	var host, path string
-	if strings.Contains(remoteURL, "://") {
-		parsed, err := url.Parse(remoteURL)
-		if err != nil {
-			return nil, err
-		}
-		host, path = parsed.Hostname(), parsed.Path
-	} else if at := strings.LastIndex(remoteURL, "@"); at >= 0 {
-		if colon := strings.Index(remoteURL[at+1:], ":"); colon >= 0 {
-			host = remoteURL[at+1 : at+1+colon]
-			path = remoteURL[at+2+colon:]
-		}
-	} else if colon := strings.Index(remoteURL, ":"); colon >= 0 {
-		host, path = remoteURL[:colon], remoteURL[colon+1:]
-	}
-	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
-	parts := strings.Split(path, "/")
-	if host == "" || len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return nil, fmt.Errorf("unsupported GitHub remote URL %q", remoteURL)
-	}
-	return &RepoInfo{Host: strings.ToLower(host), Owner: parts[0], Name: parts[1]}, nil
 }

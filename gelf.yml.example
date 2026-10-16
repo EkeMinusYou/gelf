@@ -38,6 +38,10 @@ commit:
 
 # PR-specific settings
 pr:
+  # PR hosting provider: auto, github, or gitea (default: auto)
+  # Can be overridden with --provider; Gitea authentication uses tea login add.
+  provider: "auto"
+
   # Model to use for pull requests: "flash", "pro", or custom model name (default: pro)
   model: "pro"
 
@@ -54,6 +58,11 @@ pr:
 
   # Optional: Override language for PR body only (inherits from pr.language if not set)
   # body_language: "japanese"
+
+# Saved tea login (optional; selected from the push remote when omitted)
+# Set this when multiple tea logins match the server.
+# gitea:
+#   login: "work"
 
 # Omitted or zero diff limits use the default; negative values are invalid.
 # Malformed or unreadable configuration files stop the command.

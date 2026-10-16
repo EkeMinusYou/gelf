@@ -164,7 +164,7 @@ Branch: %s
 func (v *VertexAIClient) GeneratePullRequestContent(ctx context.Context, input PullRequestInput) (*PullRequestContent, error) {
 	titleLanguage, bodyLanguage, template := input.promptSettings()
 
-	prompt := fmt.Sprintf(`You are an expert software engineer writing a GitHub pull request title and description.
+	prompt := fmt.Sprintf(`You are an expert software engineer writing a pull request title and description.
 
 OUTPUT FORMAT:
 - Respond with ONLY a valid JSON object.
@@ -220,7 +220,7 @@ func (v *VertexAIClient) RevisePullRequestContent(ctx context.Context, input Pul
 
 	titleLanguage, bodyLanguage, template := input.promptSettings()
 
-	prompt := fmt.Sprintf(`You are an expert software engineer revising a GitHub pull request title and description based on user feedback.
+	prompt := fmt.Sprintf(`You are an expert software engineer revising a pull request title and description based on user feedback.
 
 OUTPUT FORMAT:
 - Respond with ONLY a valid JSON object.

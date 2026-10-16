@@ -14,7 +14,7 @@ import (
 )
 
 func TestRepoAndRemoteIdentity(t *testing.T) {
-	for _, remote := range []string{"git@github.com:owner/repo.git", "ssh://git@github.com/owner/repo.git", "https://github.com/owner/repo.git", "https://github.com/owner/repo"} {
+	for _, remote := range []string{"git@github.com:owner/repo.git", "ssh://git@github.com/owner/repo.git", "https://github.com/owner/repo.git", "https://github.com/owner/repo", "ssh://git@ssh.github.com:443/owner/repo.git"} {
 		info, err := RepoInfoFromRemoteURL(remote)
 		if err != nil || info.Host != "github.com" || info.FullName() != "owner/repo" {
 			t.Fatalf("%s: %+v %v", remote, info, err)

@@ -36,6 +36,8 @@ type Config struct {
 	PRSessionLogCount    int
 	PRMaxSessionLogBytes int
 	PRModel              string
+	PRProvider           string
+	GiteaLogin           string
 	Color                string
 }
 
@@ -50,13 +52,17 @@ type FileConfig struct {
 	} `yaml:"model"`
 	Language string `yaml:"language"`
 	Color    string `yaml:"color"`
-	Commit   struct {
+	Gitea    struct {
+		Login string `yaml:"login"`
+	} `yaml:"gitea"`
+	Commit struct {
 		Model        string `yaml:"model"`
 		Language     string `yaml:"language"`
 		MaxDiffBytes int    `yaml:"max_diff_bytes"`
 		Thinking     string `yaml:"thinking"`
 	} `yaml:"commit"`
 	PR struct {
+		Provider           string `yaml:"provider"`
 		SessionLogs        bool   `yaml:"session_logs"`
 		SessionLogCount    *int   `yaml:"session_log_count"`
 		MaxSessionLogBytes int    `yaml:"max_session_log_bytes"`
@@ -168,9 +174,16 @@ func Load() (*Config, error) {
 		CommitLanguage: commitLanguage, CommitMaxDiffBytes: commitMaxDiffBytes, CommitThinking: commitThinking,
 		PRLanguage: prLanguage, PRTitleLanguage: prTitleLanguage, PRBodyLanguage: prBodyLanguage,
 		PRMaxDiffBytes: fileConfig.PR.MaxDiffBytes, Color: color,
+		PRProvider: fileConfig.PR.Provider, GiteaLogin: fileConfig.Gitea.Login,
 		PRSessionLogs:        fileConfig.PR.SessionLogs,
 		PRSessionLogCount:    DefaultPRSessionLogCount,
 		PRMaxSessionLogBytes: fileConfig.PR.MaxSessionLogBytes,
+	}
+	if cfg.PRProvider == "" {
+		cfg.PRProvider = "auto"
+	}
+	if cfg.PRProvider != "auto" && cfg.PRProvider != "github" && cfg.PRProvider != "gitea" {
+		return nil, fmt.Errorf("invalid pr.provider setting %q: expected auto, github, or gitea", cfg.PRProvider)
 	}
 	if fileConfig.PR.SessionLogCount != nil {
 		if *fileConfig.PR.SessionLogCount <= 0 {
