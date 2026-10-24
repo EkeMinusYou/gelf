@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
@@ -19,15 +20,46 @@ const DefaultPRSessionLogCount = 3
 // DefaultCommitThinking keeps commit message generation fast; the task rarely benefits from reasoning.
 const DefaultCommitThinking = "minimal"
 
+const DefaultCommitTimeout = 60 * time.Second
+const DefaultAPIVersion = "v1"
+const DefaultFlashModel = "gemini-3.8-flash"
+const DefaultProModel = "gemini-4-argon"
+
+// Model keeps a model ID and its serving location together through alias resolution.
+type Model struct {
+	Name     string `yaml:"name"`
+	Location string `yaml:"location"`
+}
+
+// UnmarshalYAML accepts the original scalar model ID as well as a model/location pair.
+func (m *Model) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode && node.Tag == "!!str" {
+		*m = Model{Name: node.Value}
+		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("model must be a model name or a mapping with name and location")
+	}
+	type plainModel Model
+	var value plainModel
+	if err := node.Decode(&value); err != nil {
+		return err
+	}
+	*m = Model(value)
+	return nil
+}
+
 type Config struct {
 	ProjectID            string
 	Location             string
-	FlashModel           string
-	ProModel             string
+	APIVersion           string
+	FlashModel           Model
+	ProModel             Model
 	CommitLanguage       string
-	CommitModel          string
+	CommitModel          Model
 	CommitMaxDiffBytes   int
 	CommitThinking       string
+	CommitTimeout        time.Duration
 	PRLanguage           string
 	PRTitleLanguage      string
 	PRBodyLanguage       string
@@ -35,7 +67,7 @@ type Config struct {
 	PRSessionLogs        bool
 	PRSessionLogCount    int
 	PRMaxSessionLogBytes int
-	PRModel              string
+	PRModel              Model
 	PRProvider           string
 	GiteaLogin           string
 	Color                string
@@ -43,12 +75,13 @@ type Config struct {
 
 type FileConfig struct {
 	VertexAI struct {
-		ProjectID string `yaml:"project_id"`
-		Location  string `yaml:"location"`
+		ProjectID  string `yaml:"project_id"`
+		Location   string `yaml:"location"`
+		APIVersion string `yaml:"api_version"`
 	} `yaml:"vertex_ai"`
 	Model struct {
-		Flash string `yaml:"flash"`
-		Pro   string `yaml:"pro"`
+		Flash Model `yaml:"flash"`
+		Pro   Model `yaml:"pro"`
 	} `yaml:"model"`
 	Language string `yaml:"language"`
 	Color    string `yaml:"color"`
@@ -60,6 +93,7 @@ type FileConfig struct {
 		Language     string `yaml:"language"`
 		MaxDiffBytes int    `yaml:"max_diff_bytes"`
 		Thinking     string `yaml:"thinking"`
+		Timeout      string `yaml:"timeout"`
 	} `yaml:"commit"`
 	PR struct {
 		Provider           string `yaml:"provider"`
@@ -100,16 +134,26 @@ func Load() (*Config, error) {
 	if location == "" {
 		location = "global"
 	}
+	apiVersion := fileConfig.VertexAI.APIVersion
+	if apiVersion == "" {
+		apiVersion = DefaultAPIVersion
+	}
 
 	// Define model names
 	flashModel := fileConfig.Model.Flash
-	if flashModel == "" {
-		flashModel = "gemini-3.8-flash"
+	if flashModel.Name == "" {
+		flashModel.Name = DefaultFlashModel
+	}
+	if flashModel.Location == "" {
+		flashModel.Location = location
 	}
 
 	proModel := fileConfig.Model.Pro
-	if proModel == "" {
-		proModel = "gemini-3.1-pro-preview"
+	if proModel.Name == "" {
+		proModel.Name = DefaultProModel
+	}
+	if proModel.Location == "" {
+		proModel.Location = location
 	}
 
 	// Default language
@@ -137,6 +181,13 @@ func Load() (*Config, error) {
 	commitThinking := fileConfig.Commit.Thinking
 	if commitThinking == "" {
 		commitThinking = DefaultCommitThinking
+	}
+	commitTimeout := DefaultCommitTimeout
+	if fileConfig.Commit.Timeout != "" {
+		commitTimeout, err = time.ParseDuration(fileConfig.Commit.Timeout)
+		if err != nil || commitTimeout <= 0 {
+			return nil, fmt.Errorf("invalid commit.timeout %q: expected a positive duration (e.g. 60s or 2m)", fileConfig.Commit.Timeout)
+		}
 	}
 
 	// PR settings
@@ -169,10 +220,11 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		ProjectID: projectID, Location: location,
+		ProjectID: projectID, Location: location, APIVersion: apiVersion,
 		FlashModel: flashModel, ProModel: proModel,
 		CommitLanguage: commitLanguage, CommitMaxDiffBytes: commitMaxDiffBytes, CommitThinking: commitThinking,
-		PRLanguage: prLanguage, PRTitleLanguage: prTitleLanguage, PRBodyLanguage: prBodyLanguage,
+		CommitTimeout: commitTimeout,
+		PRLanguage:    prLanguage, PRTitleLanguage: prTitleLanguage, PRBodyLanguage: prBodyLanguage,
 		PRMaxDiffBytes: fileConfig.PR.MaxDiffBytes, Color: color,
 		PRProvider: fileConfig.PR.Provider, GiteaLogin: fileConfig.Gitea.Login,
 		PRSessionLogs:        fileConfig.PR.SessionLogs,
@@ -277,13 +329,19 @@ func (c *Config) UseColor(out io.Writer) bool {
 	}
 }
 
-func (c *Config) ResolveModel(name string) string {
+func (c *Config) ResolveModel(name string) Model {
 	switch name {
 	case "", "flash":
 		return c.FlashModel
 	case "pro":
 		return c.ProModel
 	default:
-		return name
+		if name == c.FlashModel.Name {
+			return c.FlashModel
+		}
+		if name == c.ProModel.Name {
+			return c.ProModel
+		}
+		return Model{Name: name, Location: c.Location}
 	}
 }

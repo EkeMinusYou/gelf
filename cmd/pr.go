@@ -110,7 +110,8 @@ func runPRCreate(cmd *cobra.Command, opts prOptions, deps dependencies) error {
 	if opts.Model != "" {
 		model = cfg.ResolveModel(opts.Model)
 	}
-	client, err := deps.NewAI(ctx, cfg, model)
+	cfg.Location = model.Location
+	client, err := deps.NewAI(ctx, cfg, model.Name)
 	if err != nil {
 		return fmt.Errorf("failed to create AI client: %w", err)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/git"
@@ -25,19 +26,22 @@ const (
 )
 
 type model struct {
-	session       *Session
-	styles        Styles
-	ctx           context.Context
-	cancel        context.CancelFunc
-	commit        func(context.Context, string) error
-	aiClient      ai.Client
-	input         ai.CommitInput
-	diffSummary   git.DiffSummary
-	commitMessage string
-	err           error
-	state         state
-	spinner       spinner.Model
-	revisionInput textinput.Model
+	session           *Session
+	styles            Styles
+	ctx               context.Context
+	cancel            context.CancelFunc
+	commit            func(context.Context, string) error
+	aiClient          ai.Client
+	input             ai.CommitInput
+	diffSummary       git.DiffSummary
+	commitMessage     string
+	partialMessage    string
+	progress          chan string
+	generationStarted time.Time
+	err               error
+	state             state
+	spinner           spinner.Model
+	revisionInput     textinput.Model
 	// revising marks the loading state as a revision, whose failure returns to confirmation.
 	revising bool
 	notice   string
@@ -71,12 +75,14 @@ func NewTUI(session *Session, aiClient ai.Client, input ai.CommitInput, summary 
 
 	return &model{
 		session: session, styles: session.Styles, ctx: ctx, cancel: cancel, commit: commit,
-		aiClient:      aiClient,
-		input:         input,
-		diffSummary:   summary,
-		state:         stateLoading,
-		spinner:       s,
-		revisionInput: ri,
+		aiClient:          aiClient,
+		input:             input,
+		diffSummary:       summary,
+		state:             stateLoading,
+		progress:          make(chan string, 1),
+		generationStarted: time.Now(),
+		spinner:           s,
+		revisionInput:     ri,
 	}
 }
 
@@ -86,6 +92,11 @@ func (m *model) Init() tea.Cmd {
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
+	select {
+	case partial := <-m.progress:
+		m.partialMessage = partial
+	default:
+	}
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -129,6 +140,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.state, m.revising = stateLoading, true
+				m.partialMessage = ""
+				m.generationStarted = time.Now()
 				return m, tea.Batch(m.spinner.Tick, m.reviseCommitMessage(instructions))
 			case "esc":
 				m.revisionInput.Blur()
@@ -143,6 +156,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case msgCommitGenerated:
 		m.revising = false
+		m.partialMessage = ""
 		if msg.err != nil && msg.revision {
 			// Keep the current message so a failed revision can be retried or approved.
 			m.notice = fmt.Sprintf("✗ Failed to apply the prompt; kept the previous message: %v", msg.err)
@@ -185,7 +199,10 @@ func (m *model) View() string {
 		if m.revising {
 			status = "Applying your prompt..."
 		}
-		loadingText := fmt.Sprintf("%s %s", m.spinner.View(), m.styles.Loading.Render(status))
+		loadingText := fmt.Sprintf("%s %s (%s)", m.spinner.View(), m.styles.Loading.Render(status), time.Since(m.generationStarted).Truncate(time.Second))
+		if m.partialMessage != "" {
+			loadingText += "\n\n" + m.partialMessage
+		}
 
 		diffSummary := m.formatDiffSummary()
 		if diffSummary != "" {
@@ -240,7 +257,9 @@ func (m *model) View() string {
 func (m *model) generateCommitMessage() tea.Cmd {
 	return tea.Cmd(func() tea.Msg {
 		ctx := m.ctx
-		message, err := m.aiClient.GenerateCommitMessage(ctx, m.input)
+		input := m.input
+		input.OnProgress = m.reportProgress
+		message, err := m.aiClient.GenerateCommitMessage(ctx, input)
 		return msgCommitGenerated{
 			message: strings.TrimSpace(message),
 			err:     err,
@@ -271,9 +290,27 @@ func (m *model) applyEdit(msg msgEdited) {
 func (m *model) reviseCommitMessage(instructions string) tea.Cmd {
 	previous := m.commitMessage
 	return tea.Cmd(func() tea.Msg {
-		message, err := m.aiClient.ReviseCommitMessage(m.ctx, m.input, previous, instructions)
+		input := m.input
+		input.OnProgress = m.reportProgress
+		message, err := m.aiClient.ReviseCommitMessage(m.ctx, input, previous, instructions)
 		return msgCommitGenerated{message: strings.TrimSpace(message), err: err, revision: true}
 	})
+}
+
+// reportProgress keeps the latest snapshot without blocking generation on rendering.
+func (m *model) reportProgress(text string) {
+	select {
+	case m.progress <- text:
+	default:
+		select {
+		case <-m.progress:
+		default:
+		}
+		select {
+		case m.progress <- text:
+		default:
+		}
+	}
 }
 
 func (m *model) commitChanges() tea.Cmd {

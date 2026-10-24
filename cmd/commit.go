@@ -44,6 +44,10 @@ func runCommit(cmd *cobra.Command, opts commitOptions, deps dependencies) error 
 	if opts.Language != "" {
 		language = opts.Language
 	}
+	// Keep the selected model and endpoint together without mutating shared configuration.
+	resolved := *cfg
+	resolved.Location = model.Location
+	cfg = &resolved
 	diff, err := deps.Git.StagedDiff(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get staged changes: %w", err)
@@ -71,7 +75,7 @@ func runCommit(cmd *cobra.Command, opts commitOptions, deps dependencies) error 
 	// Branch is optional context, so a detached HEAD is not an error here.
 	branch, _ := deps.Git.CurrentBranch(ctx)
 	input := ai.CommitInput{Diff: aiDiff, DiffStat: diffStat, Branch: branch, RecentCommits: recentCommits, Language: language}
-	client, err := deps.NewAI(ctx, cfg, model)
+	client, err := deps.NewAI(ctx, cfg, model.Name)
 	if err != nil {
 		return fmt.Errorf("failed to create AI client: %w", err)
 	}

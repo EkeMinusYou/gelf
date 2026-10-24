@@ -70,17 +70,23 @@ Create a `gelf.yml` file in one of the following locations (in order of priority
 vertex_ai:
   project_id: "your-gcp-project-id"
   location: "global"  # optional, default: global
+  api_version: "v1"  # optional, default: v1 (stable API)
 
 model:
-  flash: gemini-3.8-flash
-  pro: gemini-3.1-pro-preview
+  flash:
+    name: gemini-3.8-flash
+    location: us        # optional, inherits vertex_ai.location when omitted
+  pro:
+    name: gemini-4-argon
+    location: global    # optional, inherits vertex_ai.location when omitted
 
 language: "english"  # optional, default: english
 
 commit:
   model: "flash"     # optional, default: flash
   language: "english"  # optional, inherits from global language
-  thinking: "minimal"  # optional, default: minimal
+  thinking: "minimal"  # optional, default: minimal (low on models without minimal support)
+  timeout: "60s"      # optional, total time limit for generation and each revision
 
 pr:
   model: "pro"       # optional, default: pro
@@ -136,6 +142,7 @@ gelf commit
 Generated messages have a Conventional Commits subject line and, for material changes, a body separated by a blank line. The AI receives the staged diff, its diffstat, the current branch name, and the five most recent commit subjects so that the generated message follows the repository's existing scope and wording style.
 
 3. Interactive TUI operations:
+   - Watch the message appear as it is generated, with elapsed time shown while waiting; approval becomes available after generation completes
    - Review the AI-generated commit message (Conventional Commits types such as `feat` and `chore` are color-coded; breaking changes marked with `!` or a `BREAKING CHANGE:` footer are shown in white on red)
    - Press `y` to approve or `n` to cancel
    - Press `e` to edit the commit message in your editor (the same one git uses: `GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`, then `vi`). Save and quit to apply; lines starting with `#` are ignored, and an empty message keeps the previous one
@@ -251,7 +258,7 @@ gelf commit --dry-run
 gelf commit --dry-run --quiet
 
 # Use specific model temporarily
-gelf commit --model gemini-2.0-flash-exp
+gelf commit --model pro
 
 # Generate commit message in a specific language
 gelf commit --language japanese
@@ -272,7 +279,7 @@ gelf pr create --dry-run
 gelf pr create --dry-run --no-render
 
 # Use specific model and language for PR generation
-gelf pr create --model gemini-2.0-flash-exp --language japanese
+gelf pr create --model flash --language japanese
 
 # Use different languages for title and body
 gelf pr create --title-language english --body-language japanese
@@ -353,7 +360,7 @@ This allows you to set a global default language, override it for specific comma
 - **PR Hosts**: GitHub (via `gh`) and Gitea (via `tea api`)
 - **AI Provider**: Vertex AI (Gemini models)
 - **Default Flash Model**: gemini-3.8-flash
-- **Default Pro Model**: gemini-3.1-pro-preview
+- **Default Pro Model**: gemini-4-argon
 - **UI Framework**: Bubble Tea (TUI)
 - **CLI Framework**: Cobra
 
@@ -425,10 +432,15 @@ Settings are applied in the following order (highest to lowest priority):
 vertex_ai:
   project_id: string     # Google Cloud project ID
   location: string       # Vertex AI location (default: global)
+  api_version: string    # Vertex AI API version (default: v1; use v1beta1 for beta-only features)
 
 model:
-  flash: string          # Gemini Flash model to use (default: gemini-3.8-flash)
-  pro: string            # Gemini Pro model to use (default: gemini-3.1-pro-preview)
+  flash:
+    name: string        # Flash model ID (default: gemini-3.8-flash)
+    location: string    # Endpoint for this model (inherits vertex_ai.location)
+  pro:
+    name: string        # Higher-capability model ID (default: gemini-4-argon)
+    location: string    # Endpoint for this model (inherits vertex_ai.location)
 
 language: string         # Global default language (default: english)
 
@@ -437,7 +449,9 @@ commit:
   language: string       # Language for commit messages (inherits from global if not set)
   max_diff_bytes: number # Maximum staged diff size sent to the AI (default: 100000)
   thinking: string       # Gemini thinking level for commits: "minimal", "low", "medium", "high", or "default" (default: minimal)
-                         # Unsupported levels fall back automatically (minimal → low → model default), e.g. for Pro or Gemini 2.5
+                         # Models known not to support minimal (e.g. Gemini 3.8 Flash and Gemini 4 Argon) start with low
+                         # Other unsupported levels fall back automatically (minimal → low → model default)
+  timeout: string        # Total generation/revision time limit, including fallbacks (default: 60s; positive duration, e.g. 2m)
 
 pr:
   provider: string       # PR hosting provider: "auto", "github", or "gitea" (default: auto)
@@ -457,6 +471,16 @@ color: string            # Color output setting: "auto", "always", or "never" (d
 ```
 
 Both diff limits apply only to AI input. Oversized diffs are truncated at a line/UTF-8 boundary with a warning, while interactive changed-file summaries still include every file and its full line counts. Omitted or zero limits use 100,000 bytes; negative values are invalid.
+
+gelf explicitly uses the stable Vertex AI `v1` API, as shown in [Google's SDK quickstart](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/sdks/overview), instead of inheriting the SDK's beta API default. Set `vertex_ai.api_version: v1beta1` if your model requires beta-only features.
+
+Model IDs and locations are selected together. Both commands and `--model flash` / `--model pro` use the selected profile's location; switching commands does not change the profile's endpoint. An explicit model ID matching a configured profile also retains that location; other custom model IDs use `vertex_ai.location`. The original scalar format (`flash: gemini-3.8-flash`) remains supported and inherits `vertex_ai.location`, including its environment override. An explicit profile location takes precedence over that inherited default.
+
+For models supporting multi-region endpoints, `model.flash.location: us` or `eu` uses the corresponding [multi-region REP endpoint](https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations). Gemini 3.8 Flash and Gemini 4 Argon support these endpoints. If you configure a global-only model such as Gemini 3.1 Pro, set its profile's location to `global`. Availability and latency vary by endpoint.
+
+Gemini 3 and 4 models use their default sampling settings instead of a low temperature override, following [Google's recommendation](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/get-started-with-gemini-3#temperature). Commit generation and revisions use streaming, so the interactive preview updates as text arrives. Partial, interrupted, or truncated streams cannot be approved as commit messages.
+
+If no model activity arrives for the first 20 seconds, gelf cancels the request and retries once with the same model, prompt, and thinking settings. Once generation starts, it continues under the original `commit.timeout` deadline instead of being discarded after 20 seconds. The retry shares that deadline (default: 60s); timeouts of 20s or less skip this retry. A retried request can incur another generation charge. Increase `commit.timeout` for slower models or higher thinking levels. A failed revision keeps the previous message for review or retry.
 
 Configuration files that are missing are skipped during discovery. Malformed YAML and other read errors stop the command and report the affected file instead of silently using defaults. `color: auto` enables color only for terminal output and respects `NO_COLOR` and `TERM=dumb`; `always` is the default and `never` disables styling.
 

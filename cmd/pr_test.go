@@ -23,10 +23,11 @@ import (
 )
 
 type commandAI struct {
-	Input  ai.PullRequestInput
-	Commit ai.CommitInput
-	Model  string
-	Err    error
+	Input    ai.PullRequestInput
+	Commit   ai.CommitInput
+	Model    string
+	Location string
+	Err      error
 }
 
 func (c *commandAI) GenerateCommitMessage(ctx context.Context, input ai.CommitInput) (string, error) {
@@ -45,7 +46,7 @@ func (c *commandAI) RevisePullRequestContent(ctx context.Context, input ai.PullR
 }
 
 func testConfig() *config.Config {
-	return &config.Config{ProjectID: "test", Location: "global", FlashModel: "flash-model", ProModel: "pro-model", CommitModel: "flash-model", PRModel: "pro-model", CommitLanguage: "english", PRLanguage: "english", PRTitleLanguage: "english", PRBodyLanguage: "english", CommitMaxDiffBytes: 100000, PRMaxDiffBytes: 100000, PRSessionLogCount: 3, PRMaxSessionLogBytes: 20000, Color: "never"}
+	return &config.Config{ProjectID: "test", Location: "global", FlashModel: config.Model{Name: "flash-model", Location: "global"}, ProModel: config.Model{Name: "pro-model", Location: "global"}, CommitModel: config.Model{Name: "flash-model", Location: "global"}, PRModel: config.Model{Name: "pro-model", Location: "global"}, CommitLanguage: "english", PRLanguage: "english", PRTitleLanguage: "english", PRBodyLanguage: "english", CommitMaxDiffBytes: 100000, PRMaxDiffBytes: 100000, PRSessionLogCount: 3, PRMaxSessionLogBytes: 20000, Color: "never"}
 }
 
 func TestPRDryRunUsesSessionContextWhenEnabled(t *testing.T) {
@@ -270,6 +271,7 @@ func newPRFixture(t *testing.T) *prFixture {
 	}))
 	f.Deps = dependencies{Git: repo, GitHub: gh, LoadConfig: func() (*config.Config, error) { return f.Config, nil }, NewAI: func(ctx context.Context, cfg *config.Config, model string) (ai.Client, error) {
 		f.AI.Model = model
+		f.AI.Location = cfg.Location
 		return f.AI, nil
 	}}
 	return f
@@ -277,6 +279,7 @@ func newPRFixture(t *testing.T) *prFixture {
 
 func TestPRDryRunUsesParentBaseAndFetchesWithoutPublishing(t *testing.T) {
 	f := newPRFixture(t)
+	f.Config.FlashModel.Location = "us"
 	f.Config.PRMaxDiffBytes = 160
 	before := testutil.Git(t, f.Dir, "rev-parse", "HEAD")
 	out, stderr, err := executeCommand(t, f.Deps, "", "pr", "create", "--dry-run", "--no-render", "--language", "japanese", "--title-language", "english", "--model", "flash")
@@ -286,7 +289,7 @@ func TestPRDryRunUsesParentBaseAndFetchesWithoutPublishing(t *testing.T) {
 	if !strings.Contains(out, "generated title") || !strings.Contains(stderr, "limiting AI input") || len(f.AI.Input.Diff) > 160 || !strings.HasSuffix(f.AI.Input.Diff, "[diff truncated]") {
 		t.Fatalf("out=%q stderr=%q input=%+v", out, stderr, f.AI.Input)
 	}
-	if strings.Contains(f.AI.Input.CommitLog, "parent advancement") || strings.Contains(f.AI.Input.DiffStat, "parent-only") || f.AI.Model != "flash-model" || f.AI.Input.TitleLanguage != "english" || f.AI.Input.BodyLanguage != "japanese" {
+	if strings.Contains(f.AI.Input.CommitLog, "parent advancement") || strings.Contains(f.AI.Input.DiffStat, "parent-only") || f.AI.Model != "flash-model" || f.AI.Location != "us" || f.Config.Location != "global" || f.AI.Input.TitleLanguage != "english" || f.AI.Input.BodyLanguage != "japanese" {
 		t.Fatalf("incorrect base/model/language: %+v", f.AI)
 	}
 	for _, cmd := range f.Commands {

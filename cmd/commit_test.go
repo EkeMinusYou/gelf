@@ -28,7 +28,7 @@ func TestCommitLimitsOnlyAIInputAndResolvesModelAlias(t *testing.T) {
 	if err != nil || out != "fix: generated message" || !strings.Contains(stderr, "later-日本語.txt (+2, -0)") || len(client.Commit.Diff) > 120 || !strings.Contains(client.Commit.DiffStat, "a.txt") || client.Commit.Branch != "main" || client.Commit.RecentCommits != "initial" || client.Model != "pro-model" || client.Commit.Language != "japanese" {
 		t.Fatalf("out=%q stderr=%q client=%+v err=%v", out, stderr, client, err)
 	}
-	if cfg.FlashModel != "flash-model" || cfg.CommitLanguage != "english" {
+	if cfg.FlashModel.Name != "flash-model" || cfg.CommitLanguage != "english" {
 		t.Fatal("command overrides mutated shared configuration")
 	}
 	out, stderr, err = executeCommand(t, deps, "", "commit", "--dry-run", "--quiet")
@@ -53,5 +53,25 @@ func TestCommitPropagatesGenerationFailure(t *testing.T) {
 	}
 	if got := testutil.Git(t, dir, "log", "-1", "--format=%s"); got != "initial" {
 		t.Fatalf("unexpected commit: %s", got)
+	}
+}
+
+func TestCommitEndpointDoesNotChangeSharedConfiguration(t *testing.T) {
+	dir := testutil.Repo(t)
+	testutil.Write(t, dir, "file", "change")
+	testutil.Git(t, dir, "add", ".")
+	cfg := testConfig()
+	cfg.FlashModel.Location = "us"
+	cfg.ProModel = config.Model{Name: "gemini-3.1-pro-preview", Location: "global"}
+	var location string
+	deps := dependencies{Git: git.NewRepository(dir), LoadConfig: func() (*config.Config, error) { return cfg, nil }, NewAI: func(ctx context.Context, resolved *config.Config, model string) (ai.Client, error) {
+		location = resolved.Location
+		return &commandAI{}, nil
+	}}
+	for _, tc := range []struct{ model, location string }{{"flash", "us"}, {"pro", "global"}} {
+		_, _, err := executeCommand(t, deps, "", "commit", "--dry-run", "--quiet", "--model", tc.model)
+		if err != nil || location != tc.location || cfg.Location != "global" || cfg.FlashModel.Location != "us" {
+			t.Fatalf("model=%s location=%s shared_location=%s err=%v", tc.model, location, cfg.Location, err)
+		}
 	}
 }

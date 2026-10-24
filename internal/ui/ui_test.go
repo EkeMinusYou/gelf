@@ -41,6 +41,55 @@ func (f *fakeAI) RevisePullRequestContent(ctx context.Context, input ai.PullRequ
 	return &ai.PullRequestContent{Title: "revised", Body: "revised body"}, nil
 }
 
+type progressingAI struct{ fakeAI }
+
+func (f *progressingAI) GenerateCommitMessage(ctx context.Context, input ai.CommitInput) (string, error) {
+	if input.OnProgress == nil {
+		return "", errors.New("missing progress callback")
+	}
+	input.OnProgress("fix: par")
+	input.OnProgress("fix: complete")
+	return "fix: complete", nil
+}
+
+func (f *progressingAI) ReviseCommitMessage(ctx context.Context, input ai.CommitInput, previous, instructions string) (string, error) {
+	if input.OnProgress == nil {
+		return "", errors.New("missing progress callback")
+	}
+	input.OnProgress("unfinished revision")
+	return "", errors.New("stream interrupted")
+}
+
+func TestCommitStreamingPreviewCannotBeApprovedBeforeCompletion(t *testing.T) {
+	session := NewSession(context.Background(), strings.NewReader(""), io.Discard, io.Discard, false, false)
+	tui := NewTUI(session, &progressingAI{}, ai.CommitInput{}, git.DiffSummary{}, nil)
+	defer tui.cancel()
+	message := tui.generateCommitMessage()()
+	tui.Update(nil)
+	if tui.state != stateLoading || !strings.Contains(tui.View(), "fix: complete") || strings.Contains(tui.View(), "Commit this message?") {
+		t.Fatalf("preview missing or approvable: state=%v view=%s", tui.state, tui.View())
+	}
+	tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if tui.state != stateLoading {
+		t.Fatal("approved an unfinished stream")
+	}
+	tui.Update(message)
+	if tui.state != stateConfirm || tui.commitMessage != "fix: complete" || tui.partialMessage != "" {
+		t.Fatalf("completed stream did not become approvable: state=%v message=%q", tui.state, tui.commitMessage)
+	}
+
+	tui.state, tui.revising = stateLoading, true
+	revision := tui.reviseCommitMessage("clarify")()
+	tui.Update(nil)
+	if !strings.Contains(tui.View(), "unfinished revision") {
+		t.Fatal("revision preview missing")
+	}
+	tui.Update(revision)
+	if tui.state != stateConfirm || tui.commitMessage != "fix: complete" || strings.Contains(tui.View(), "unfinished revision") {
+		t.Fatal("failed revision replaced the previous message or left a stale preview")
+	}
+}
+
 func TestPipedPRRevisionKeepsAllInputAndSummary(t *testing.T) {
 	var out bytes.Buffer
 	session := NewSession(context.Background(), strings.NewReader("p\nshorten title\ny\n"), &out, io.Discard, false, false)
