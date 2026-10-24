@@ -95,12 +95,16 @@ func NewVertexAIClient(ctx context.Context, cfg *config.Config, model string) (*
 }
 
 func (v *VertexAIClient) GenerateCommitMessage(ctx context.Context, input CommitInput) (string, error) {
-	prompt := commitPrompt("<task>Write a commit message for the staged changes below.</task>", input, "")
+	prompt := initialCommitPrompt(input)
 	text, err := v.generateCommit(ctx, prompt, input.OnProgress)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate commit message: %w", err)
 	}
 	return text, nil
+}
+
+func initialCommitPrompt(input CommitInput) string {
+	return commitPrompt("<task>Write a commit message for the staged changes below.</task>", input, "")
 }
 
 func (v *VertexAIClient) ReviseCommitMessage(ctx context.Context, input CommitInput, previous, instructions string) (string, error) {

@@ -3,12 +3,15 @@ package cmd
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/config"
 	"github.com/EkeMinusYou/gelf/internal/git"
+	"github.com/EkeMinusYou/gelf/internal/process"
 	"github.com/EkeMinusYou/gelf/internal/testutil"
 )
 
@@ -38,6 +41,115 @@ func TestCommitLimitsOnlyAIInputAndResolvesModelAlias(t *testing.T) {
 	out, _, err = executeCommand(t, deps, "", "commit", "--yes")
 	if err != nil || !strings.Contains(out, "Commit successful") || testutil.Git(t, dir, "log", "-1", "--format=%s") != "fix: generated message" || testutil.Git(t, dir, "status", "--porcelain") != "" {
 		t.Fatalf("commit=%q %v", out, err)
+	}
+}
+
+type countedCommitAI struct {
+	commandAI
+	calls int
+}
+
+func (c *countedCommitAI) GenerateCommitMessage(ctx context.Context, input ai.CommitInput) (string, error) {
+	c.calls++
+	return c.commandAI.GenerateCommitMessage(ctx, input)
+}
+
+func TestCommitCacheReuseBypassAndStagedChange(t *testing.T) {
+	dir := testutil.Repo(t)
+	testutil.Write(t, dir, "file", "change\n")
+	testutil.Git(t, dir, "add", ".")
+	cfg := testConfig()
+	cfg.CommitCache = true
+	client := &countedCommitAI{}
+	deps := dependencies{Git: git.NewRepository(dir), CommitCache: &ai.CommitCache{Dir: t.TempDir()}, LoadConfig: func() (*config.Config, error) { return cfg, nil }, NewAI: func(context.Context, *config.Config, string) (ai.Client, error) { return client, nil }}
+	run := func(extra ...string) {
+		t.Helper()
+		out, _, err := executeCommand(t, deps, "", append([]string{"commit", "--dry-run", "--quiet"}, extra...)...)
+		if err != nil || out != "fix: generated message" {
+			t.Fatalf("output=%q err=%v", out, err)
+		}
+	}
+	run()
+	run()
+	if client.calls != 1 {
+		t.Fatalf("unchanged input regenerated: %d", client.calls)
+	}
+	run("--no-cache")
+	if client.calls != 2 {
+		t.Fatal("--no-cache did not force generation")
+	}
+	testutil.Write(t, dir, "file", "different staged change\n")
+	testutil.Git(t, dir, "add", ".")
+	run()
+	if client.calls != 3 || !strings.Contains(client.Commit.Diff, "+different staged change") {
+		t.Fatal("changed index reused a stale message")
+	}
+	cfg.CommitCache = false
+	run()
+	if client.calls != 4 {
+		t.Fatal("disabled cache was used")
+	}
+}
+
+func TestCommitPreparationRunsIndependentReadsConcurrently(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan string, 4)
+	release := make(chan struct{})
+	runner := testutil.RunnerFunc(func(ctx context.Context, name string, args []string, input io.Reader) (process.Result, error) {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "-U5") {
+			return process.Result{Stdout: "diff --git a/file b/file\n+change\n"}, nil
+		}
+		var out string
+		switch {
+		case strings.Contains(joined, "--numstat"):
+			out = "1\t0\tfile\x00"
+		case strings.Contains(joined, "--stat"):
+			out = "file | 1 +"
+		case strings.HasPrefix(joined, "rev-parse"):
+			out = "HEAD"
+		case strings.HasPrefix(joined, "log"):
+			return process.Result{Stdout: "fix: style"}, nil
+		case strings.HasPrefix(joined, "symbolic-ref"):
+			out = "topic"
+		default:
+			return process.Result{}, errors.New("unexpected command: " + joined)
+		}
+		ready <- joined
+		select {
+		case <-release:
+			return process.Result{Stdout: out}, nil
+		case <-ctx.Done():
+			return process.Result{}, ctx.Err()
+		}
+	})
+	client := &commandAI{}
+	deps := dependencies{Git: &git.Repository{Runner: runner}, LoadConfig: func() (*config.Config, error) { return testConfig(), nil }, NewAI: func(context.Context, *config.Config, string) (ai.Client, error) { return client, nil }}
+	done := make(chan error, 1)
+	go func() {
+		root := newRootCommand(deps)
+		root.SetArgs([]string{"commit", "--dry-run"})
+		root.SetOut(io.Discard)
+		root.SetErr(io.Discard)
+		done <- root.ExecuteContext(ctx)
+	}()
+	timeout := time.NewTimer(2 * time.Second)
+	defer timeout.Stop()
+	for i := 0; i < 4; i++ {
+		select {
+		case <-ready:
+		case <-timeout.C:
+			cancel()
+			t.Fatal("independent Git reads did not start concurrently")
+		}
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if client.Commit.Branch != "topic" || client.Commit.RecentCommits != "fix: style" || client.Commit.DiffStat != "file | 1 +" {
+		t.Fatalf("parallel preparation changed context: %+v", client.Commit)
 	}
 }
 

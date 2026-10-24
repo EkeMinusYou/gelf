@@ -60,6 +60,7 @@ type Config struct {
 	CommitMaxDiffBytes   int
 	CommitThinking       string
 	CommitTimeout        time.Duration
+	CommitCache          bool
 	PRLanguage           string
 	PRTitleLanguage      string
 	PRBodyLanguage       string
@@ -94,6 +95,7 @@ type FileConfig struct {
 		MaxDiffBytes int    `yaml:"max_diff_bytes"`
 		Thinking     string `yaml:"thinking"`
 		Timeout      string `yaml:"timeout"`
+		Cache        *bool  `yaml:"cache"`
 	} `yaml:"commit"`
 	PR struct {
 		Provider           string `yaml:"provider"`
@@ -224,12 +226,16 @@ func Load() (*Config, error) {
 		FlashModel: flashModel, ProModel: proModel,
 		CommitLanguage: commitLanguage, CommitMaxDiffBytes: commitMaxDiffBytes, CommitThinking: commitThinking,
 		CommitTimeout: commitTimeout,
+		CommitCache:   true,
 		PRLanguage:    prLanguage, PRTitleLanguage: prTitleLanguage, PRBodyLanguage: prBodyLanguage,
 		PRMaxDiffBytes: fileConfig.PR.MaxDiffBytes, Color: color,
 		PRProvider: fileConfig.PR.Provider, GiteaLogin: fileConfig.Gitea.Login,
 		PRSessionLogs:        fileConfig.PR.SessionLogs,
 		PRSessionLogCount:    DefaultPRSessionLogCount,
 		PRMaxSessionLogBytes: fileConfig.PR.MaxSessionLogBytes,
+	}
+	if fileConfig.Commit.Cache != nil {
+		cfg.CommitCache = *fileConfig.Commit.Cache
 	}
 	if cfg.PRProvider == "" {
 		cfg.PRProvider = "auto"

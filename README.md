@@ -87,6 +87,7 @@ commit:
   language: "english"  # optional, inherits from global language
   thinking: "minimal"  # optional, default: minimal (low on models without minimal support)
   timeout: "60s"      # optional, total time limit for generation and each revision
+  cache: true         # optional, reuse an identical generation for up to one hour
 
 pr:
   model: "pro"       # optional, default: pro
@@ -140,6 +141,8 @@ gelf commit
 ```
 
 Generated messages have a Conventional Commits subject line and, for material changes, a body separated by a blank line. The AI receives the staged diff, its diffstat, the current branch name, and the five most recent commit subjects so that the generated message follows the repository's existing scope and wording style.
+
+Repeating the command with exactly the same staged changes and generation settings reuses the last successful message for that worktree for up to one hour. Changes to the diff (including content beyond the AI input limit), branch, recent commit subjects, language, model, endpoint, or thinking level require a fresh generation. Use `gelf commit --no-cache` for a new suggestion, or set `commit.cache: false` to disable reuse. Interactive prompt-based revisions always call the model. Fresh generations still depend on Vertex AI latency.
 
 3. Interactive TUI operations:
    - Watch the message appear as it is generated, with elapsed time shown while waiting; approval becomes available after generation completes
@@ -452,6 +455,7 @@ commit:
                          # Models known not to support minimal (e.g. Gemini 3.8 Flash and Gemini 4 Argon) start with low
                          # Other unsupported levels fall back automatically (minimal → low → model default)
   timeout: string        # Total generation/revision time limit, including fallbacks (default: 60s; positive duration, e.g. 2m)
+  cache: boolean         # Reuse an identical successful generation for up to one hour (default: true)
 
 pr:
   provider: string       # PR hosting provider: "auto", "github", or "gitea" (default: auto)
@@ -481,6 +485,8 @@ For models supporting multi-region endpoints, `model.flash.location: us` or `eu`
 Gemini 3 and 4 models use their default sampling settings instead of a low temperature override, following [Google's recommendation](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/get-started-with-gemini-3#temperature). Commit generation and revisions use streaming, so the interactive preview updates as text arrives. Partial, interrupted, or truncated streams cannot be approved as commit messages.
 
 If no model activity arrives for the first 20 seconds, gelf cancels the request and retries once with the same model, prompt, and thinking settings. Once generation starts, it continues under the original `commit.timeout` deadline instead of being discarded after 20 seconds. The retry shares that deadline (default: 60s); timeouts of 20s or less skip this retry. A retried request can incur another generation charge. Increase `commit.timeout` for slower models or higher thinking levels. A failed revision keeps the previous message for review or retry.
+
+Commit preparation reads independent Git context and initializes the AI client in parallel. The model, prompt, diff limit, and thinking settings are unchanged. The local commit cache stores one message, an input hash, and a timestamp per worktree in the operating system's user cache directory under `gelf/commits` (on macOS, `~/Library/Caches/gelf/commits`). Files are private to the user; staged diffs and prompts are not stored. Unavailable or invalid cache storage falls back to normal generation. `--no-cache` disables both cache reads and writes.
 
 Configuration files that are missing are skipped during discovery. Malformed YAML and other read errors stop the command and report the affected file instead of silently using defaults. `color: auto` enables color only for terminal output and respects `NO_COLOR` and `TERM=dumb`; `always` is the default and `never` disables styling.
 

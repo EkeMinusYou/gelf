@@ -35,6 +35,9 @@ func TestConfigurationDefaultsAndPrecedence(t *testing.T) {
 	if cfg.FlashModel.Name != "gemini-3.8-flash" || cfg.ProModel.Name != "gemini-4-argon" || cfg.FlashModel.Location != "global" || cfg.ProModel.Location != "global" {
 		t.Fatalf("default model profiles: %+v %+v", cfg.FlashModel, cfg.ProModel)
 	}
+	if !cfg.CommitCache {
+		t.Fatal("commit caching should be enabled by default")
+	}
 	testutil.Write(t, dir, "xdg/gelf/gelf.yaml", "language: japanese\nmodel:\n  flash: custom-flash\n  pro: custom-pro\ncommit:\n  model: pro\n  thinking: high\npr:\n  model: flash\n  body_language: french\n  max_diff_bytes: 256\nvertex_ai:\n  project_id: file-project\n  location: file-location\n")
 	t.Setenv("GOOGLE_CLOUD_PROJECT", "fallback-project")
 	t.Setenv("VERTEXAI_PROJECT", "preferred-project")
@@ -115,6 +118,15 @@ func TestCommitTimeoutConfiguration(t *testing.T) {
 	cfg, err := Load()
 	if err != nil || cfg.CommitTimeout != 2*time.Minute || cfg.APIVersion != "v1beta1" || cfg.Location != "global" {
 		t.Fatalf("timeout=%+v err=%v", cfg, err)
+	}
+}
+
+func TestCommitCacheCanBeDisabled(t *testing.T) {
+	dir := configEnv(t)
+	testutil.Write(t, dir, "gelf.yml", "commit:\n  cache: false\n")
+	cfg, err := Load()
+	if err != nil || cfg.CommitCache {
+		t.Fatalf("cache setting: %+v %v", cfg, err)
 	}
 }
 

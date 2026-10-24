@@ -33,7 +33,7 @@ type model struct {
 	commit            func(context.Context, string) error
 	aiClient          ai.Client
 	input             ai.CommitInput
-	diffSummary       git.DiffSummary
+	diffSummaryView   string
 	commitMessage     string
 	partialMessage    string
 	progress          chan string
@@ -77,7 +77,7 @@ func NewTUI(session *Session, aiClient ai.Client, input ai.CommitInput, summary 
 		session: session, styles: session.Styles, ctx: ctx, cancel: cancel, commit: commit,
 		aiClient:          aiClient,
 		input:             input,
-		diffSummary:       summary,
+		diffSummaryView:   formatDiffSummary(summary, session.Styles),
 		state:             stateLoading,
 		progress:          make(chan string, 1),
 		generationStarted: time.Now(),
@@ -321,7 +321,7 @@ func (m *model) commitChanges() tea.Cmd {
 }
 
 func (m *model) formatDiffSummary() string {
-	return formatDiffSummary(m.diffSummary, m.styles)
+	return m.diffSummaryView
 }
 
 func (m *model) Run(options ...tea.ProgramOption) error {

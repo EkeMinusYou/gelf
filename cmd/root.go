@@ -28,6 +28,7 @@ type dependencies struct {
 	LoadConfig   func() (*config.Config, error)
 	NewAI        func(context.Context, *config.Config, string) (ai.Client, error)
 	FindSessions func(context.Context, string, string, sessionlog.Options) (sessionlog.Result, error)
+	CommitCache  *ai.CommitCache
 }
 
 func defaultDependencies() dependencies {
@@ -36,6 +37,7 @@ func defaultDependencies() dependencies {
 		Git: &git.Repository{Runner: runner}, GitHub: github.NewClient(runner), LoadConfig: config.Load,
 		Gitea:        gitea.NewClient(runner),
 		FindSessions: sessionlog.Discover,
+		CommitCache:  ai.NewCommitCache(),
 		NewAI: func(ctx context.Context, cfg *config.Config, model string) (ai.Client, error) {
 			return ai.NewVertexAIClient(ctx, cfg, model)
 		},

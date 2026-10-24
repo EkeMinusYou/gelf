@@ -19,6 +19,7 @@ func newConfigCommand(deps dependencies) *cobra.Command {
 			fmt.Fprintf(out, "Current Configuration:\n======================\nProject ID:        %s\nLocation:          %s\nFlash Model:       %s\nPro Model:         %s\nCommit Model:      %s\nCommit Language:   %s\nCommit Diff Limit: %d bytes\nPR Model:          %s\nPR Language:       %s\nPR Title Language: %s\nPR Body Language:  %s\nPR Diff Limit:     %d bytes\nColor:             %s\n", cfg.ProjectID, cfg.Location, cfg.FlashModel.Name, cfg.ProModel.Name, cfg.CommitModel.Name, cfg.CommitLanguage, cfg.CommitMaxDiffBytes, cfg.PRModel.Name, cfg.PRLanguage, cfg.PRTitleLanguage, cfg.PRBodyLanguage, cfg.PRMaxDiffBytes, cfg.Color)
 			fmt.Fprintf(out, "PR Session Logs:   %t\nPR Session Count:  %d\nPR Session Limit:  %d bytes\n", cfg.PRSessionLogs, cfg.PRSessionLogCount, cfg.PRMaxSessionLogBytes)
 			fmt.Fprintf(out, "Commit Thinking:   %s\nCommit Timeout:    %s\n", cfg.CommitThinking, cfg.CommitTimeout)
+			fmt.Fprintf(out, "Commit Cache:      %t\n", cfg.CommitCache)
 			fmt.Fprintf(out, "API Version:       %s\n", cfg.APIVersion)
 			fmt.Fprintf(out, "Flash Location:    %s\nPro Location:      %s\nCommit Location:   %s\nPR Location:       %s\n", cfg.FlashModel.Location, cfg.ProModel.Location, cfg.CommitModel.Location, cfg.PRModel.Location)
 			fmt.Fprintln(out, "\nEnvironment Variables:\n======================")

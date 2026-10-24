@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/EkeMinusYou/gelf/internal/ai"
 	"github.com/EkeMinusYou/gelf/internal/git"
@@ -14,6 +15,7 @@ const recentCommitCount = 5
 
 type commitOptions struct {
 	DryRun, Quiet, Yes bool
+	NoCache            bool
 	Model, Language    string
 }
 
@@ -27,6 +29,7 @@ func newCommitCommand(deps dependencies) *cobra.Command {
 	cmd.Flags().StringVar(&opts.Model, "model", "", "Override default model for this generation")
 	cmd.Flags().StringVar(&opts.Language, "language", "", "Language for commit message generation (e.g., english, japanese)")
 	cmd.Flags().BoolVar(&opts.Yes, "yes", false, "Automatically approve commit message without interactive confirmation")
+	cmd.Flags().BoolVar(&opts.NoCache, "no-cache", false, "Generate a fresh message without reading or writing the commit cache")
 	return cmd
 }
 
@@ -59,25 +62,46 @@ func runCommit(cmd *cobra.Command, opts commitOptions, deps dependencies) error 
 		}
 		return nil
 	}
-	summary, err := deps.Git.StagedSummary(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to summarize staged changes: %w", err)
+	// These reads and client setup are independent; keep their results separate
+	// so errors retain the same precedence as the sequential workflow.
+	var summary git.DiffSummary
+	var diffStat, recentCommits, branch, root string
+	var summaryErr, statErr, recentErr, clientErr error
+	var client ai.Client
+	var pending sync.WaitGroup
+	needsSummary := (!opts.DryRun && !opts.Yes) || (opts.DryRun && !opts.Quiet)
+	useCache := cfg.CommitCache && !opts.NoCache && deps.CommitCache != nil
+	if needsSummary {
+		pending.Go(func() { summary, summaryErr = deps.Git.StagedSummary(ctx) })
+	}
+	pending.Go(func() { diffStat, statErr = deps.Git.StagedDiffStat(ctx) })
+	pending.Go(func() { recentCommits, recentErr = deps.Git.RecentCommitSubjects(ctx, recentCommitCount) })
+	// Branch is optional context, so a detached HEAD is not an error here.
+	pending.Go(func() { branch, _ = deps.Git.CurrentBranch(ctx) })
+	pending.Go(func() { client, clientErr = deps.NewAI(ctx, cfg, model.Name) })
+	if useCache {
+		pending.Go(func() { root, _ = deps.Git.Root(ctx) })
+	}
+	pending.Wait()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if summaryErr != nil {
+		return fmt.Errorf("failed to summarize staged changes: %w", summaryErr)
+	}
+	if statErr != nil {
+		return fmt.Errorf("failed to get staged diff stat: %w", statErr)
+	}
+	if recentErr != nil {
+		return fmt.Errorf("failed to get recent commits: %w", recentErr)
+	}
+	if clientErr != nil {
+		return fmt.Errorf("failed to create AI client: %w", clientErr)
 	}
 	aiDiff := limitDiffWithWarning(diff, cfg.CommitMaxDiffBytes, "staged", session)
-	diffStat, err := deps.Git.StagedDiffStat(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get staged diff stat: %w", err)
-	}
-	recentCommits, err := deps.Git.RecentCommitSubjects(ctx, recentCommitCount)
-	if err != nil {
-		return fmt.Errorf("failed to get recent commits: %w", err)
-	}
-	// Branch is optional context, so a detached HEAD is not an error here.
-	branch, _ := deps.Git.CurrentBranch(ctx)
 	input := ai.CommitInput{Diff: aiDiff, DiffStat: diffStat, Branch: branch, RecentCommits: recentCommits, Language: language}
-	client, err := deps.NewAI(ctx, cfg, model.Name)
-	if err != nil {
-		return fmt.Errorf("failed to create AI client: %w", err)
+	if useCache && root != "" {
+		client = deps.CommitCache.Wrap(client, cfg, model.Name, root, diff)
 	}
 	if opts.DryRun || opts.Yes {
 		if opts.DryRun && !opts.Quiet {
