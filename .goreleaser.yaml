@@ -6,9 +6,9 @@ builds:
   - env:
       - CGO_ENABLED=0
     goos:
+      - darwin
       - linux
       - windows
-      - darwin
     ldflags:
       - -s -w -X github.com/EkeMinusYou/gelf/cmd.version={{.Version}}
     hooks:
