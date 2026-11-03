@@ -16,7 +16,7 @@ permissions:
   packages: write
 jobs:
   goreleaser:
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 90
     env:
       MACOS_SIGN_IDENTITY: "Developer ID Application: Yusuke Mineo (8KMDCBT7AD)"
