@@ -26,8 +26,9 @@ security import "$certificate_path" -P "$MACOS_SIGN_PASSWORD" \
   -t cert -f pkcs12 -k "$keychain_path" -T /usr/bin/codesign -T /usr/bin/security
 security set-key-partition-list -S apple-tool:,apple:,codesign: \
   -s -k "$keychain_password" "$keychain_path" > /dev/null
+security list-keychains -d user -s "$keychain_path"
 
-if ! security find-identity -v -p codesigning "$keychain_path" \
+if ! security find-identity -v -p codesigning \
   | grep -Fq "\"$MACOS_SIGN_IDENTITY\""; then
   echo "The .p12 must contain the configured Developer ID Application identity and its private key." >&2
   exit 1
