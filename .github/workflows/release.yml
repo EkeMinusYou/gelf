@@ -40,8 +40,6 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
       - run: go mod download
-        env:
-          GOPROXY: direct
       - name: Set up macOS signing and notarization
         run: bash scripts/setup-macos-signing.sh
         env:
