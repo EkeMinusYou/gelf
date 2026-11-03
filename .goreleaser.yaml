@@ -6,11 +6,15 @@ builds:
   - env:
       - CGO_ENABLED=0
     goos:
+      - darwin
       - linux
       - windows
-      - darwin
     ldflags:
       - -s -w -X github.com/EkeMinusYou/gelf/cmd.version={{.Version}}
+    hooks:
+      post:
+        - cmd: 'bash scripts/sign-macos.sh "{{ .Path }}" "{{ .Os }}" "{{ .IsSnapshot }}"'
+          output: true
 
 homebrew_casks:
   - repository:
