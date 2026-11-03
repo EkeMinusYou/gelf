@@ -1,6 +1,12 @@
 name: release
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the GitHub release and update the Homebrew cask
+        type: boolean
+        required: true
+        default: false
   push:
     tags:
       - "*"
@@ -10,7 +16,12 @@ permissions:
   packages: write
 jobs:
   goreleaser:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      MACOS_SIGN_IDENTITY: "Developer ID Application: Yusuke Mineo (8KMDCBT7AD)"
+      APPLE_TEAM_ID: 8KMDCBT7AD
+      MACOS_NOTARY_PROFILE: gelf-release
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,6 +42,13 @@ jobs:
       - run: go mod download
         env:
           GOPROXY: direct
+      - name: Set up macOS signing and notarization
+        run: bash scripts/setup-macos-signing.sh
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       - name: generate completions
         run: |
           mkdir -p completions
@@ -41,7 +59,14 @@ jobs:
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          args: release --clean --timeout 60m ${{ github.event_name == 'workflow_dispatch' && !inputs.publish && '--skip=publish,validate' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APP_TOKEN: ${{ steps.generate_token.outputs.token }}
+      - name: Remove signing credentials
+        if: ${{ always() }}
+        run: |
+          if [ -f "$RUNNER_TEMP/gelf-signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/gelf-signing.keychain-db"
+          fi
+          rm -f "$RUNNER_TEMP/gelf-signing.p12"

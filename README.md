@@ -51,6 +51,9 @@ If macOS blocks execution due to the quarantine attribute, remove it with:
 sudo xattr -d com.apple.quarantine "$(which gelf)"
 ```
 
+For maintainers: see [Signed macOS releases](docs/releasing.md) to configure
+Developer ID signing and Apple notarization for future Homebrew releases.
+
 ## ⚙️ Setup
 
 ### 1. Configuration Options
